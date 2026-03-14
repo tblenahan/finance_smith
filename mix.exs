@@ -11,7 +11,10 @@ defmodule FinanceSmith.MixProject do
       usage_rules: [
         file: ".cursorrules",
         usage_rules: :all
-      ]
+      ],
+      consolidate_protocols: Mix.env() != :dev,
+      aliases: aliases(),
+      elixirc_paths: elixirc_paths(Mix.env())
     ]
   end
 
@@ -26,10 +29,21 @@ defmodule FinanceSmith.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:sourceror, "~> 1.8", only: [:dev, :test]},
       {:ash_postgres, "~> 2.0"},
       {:ash, "~> 3.0"},
       {:igniter, "~> 0.6", only: [:dev]},
       {:usage_rules, "~> 1.2", only: [:dev]}
     ]
   end
+
+  defp aliases() do
+    [test: ["ash.setup --quiet", "test"], setup: "ash.setup"]
+  end
+
+  defp elixirc_paths(:test),
+    do: elixirc_paths(:dev) ++ ["test/support"]
+
+  defp elixirc_paths(_),
+    do: ["lib"]
 end
