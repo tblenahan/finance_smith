@@ -8,9 +8,8 @@ defmodule FinanceSmith.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      FinanceSmith.Repo
-      # Starts a worker by calling: FinanceSmith.Worker.start_link(arg)
-      # {FinanceSmith.Worker, arg}
+      FinanceSmith.Repo,
+      FinanceSmith.Vault
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

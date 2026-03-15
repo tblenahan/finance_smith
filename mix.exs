@@ -32,6 +32,8 @@ defmodule FinanceSmith.MixProject do
       {:sourceror, "~> 1.8", only: [:dev, :test]},
       {:ash_postgres, "~> 2.0"},
       {:ash, "~> 3.0"},
+      {:ash_cloak, "~> 0.2.0"},
+      {:cloak, "~> 1.1"},
       {:igniter, "~> 0.6", only: [:dev]},
       {:usage_rules, "~> 1.2", only: [:dev]}
     ]
