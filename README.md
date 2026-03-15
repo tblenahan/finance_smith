@@ -29,9 +29,58 @@ See [priv/repo/README.md](priv/repo/README.md) for the full entity-relationship 
 
 ## Getting Started
 
-*(Instructions for setting up the local development environment will be added here as the project progresses.)*
-
 ### Prerequisites
 * [Elixir](https://elixir-lang.org/install.html)
 * [Docker](https://docs.docker.com/get-docker/) & Docker Compose
 * API keys for Plaid or SimpleFIN (depending on configured ingestion strategy)
+
+### Local Development Setup
+
+**1. Configure your environment**
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` if you need to change any defaults (e.g. different port or credentials).
+
+**2. Start the database**
+
+```bash
+docker compose up -d
+```
+
+This starts a PostgreSQL 17 container. The test database (`finance_smith_test`) is
+created automatically by `docker/scripts/init-test-db.sh` on the first run.
+
+**3. Create the database schema and run migrations**
+
+```bash
+mix ash.setup
+```
+
+**4. (Optional) Launch Adminer for a database UI**
+
+```bash
+docker compose --profile debug up -d
+```
+
+Adminer will be available at [http://localhost:8080](http://localhost:8080).
+
+### Using an External / Managed Database
+
+If you prefer to use a managed PostgreSQL instance instead of Docker, skip step 2 above
+and set the following variables in your `.env` (or export them in your shell) before
+running `mix ash.setup`:
+
+```
+POSTGRES_HOST=your-db-host
+POSTGRES_PORT=5432
+POSTGRES_USER=your-user
+POSTGRES_PASSWORD=your-password
+POSTGRES_DB=finance_smith_dev
+POSTGRES_TEST_DB=finance_smith_test
+```
+
+No code changes are required — the application reads all connection settings from the
+environment at startup.
