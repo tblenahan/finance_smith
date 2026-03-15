@@ -1,6 +1,8 @@
 import Config
 
-config :finance_smith, ecto_repos: [FinanceSmith.Repo]
+config :finance_smith,
+  ecto_repos: [FinanceSmith.Repo],
+  ash_domains: [FinanceSmith.Identity, FinanceSmith.Banking]
 
 config :ash,
   allow_forbidden_field_for_relationships_by_default?: true,
@@ -13,7 +15,12 @@ config :ash,
   read_action_after_action_hooks_in_order?: true,
   bulk_actions_default_to_errors?: true,
   transaction_rollback_on_error?: true,
-  known_types: [AshPostgres.Timestamptz, AshPostgres.TimestamptzUsec]
+  known_types: [
+    AshPostgres.Timestamptz,
+    AshPostgres.TimestamptzUsec,
+    FinanceSmith.Banking.Types.PlaidItemStatus,
+    FinanceSmith.Banking.Types.AccountStatus
+  ]
 
 config :spark,
   formatter: [

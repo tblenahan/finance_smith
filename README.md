@@ -23,6 +23,10 @@ Finance Smith is a centralized, self-hosted service designed to aggregate, norma
 * **Analytics-Ready Architecture:** The database schema and domain logic are structured to easily correlate and aggregate transactions, laying the groundwork for future data science and predictive analytics features.
 * **Containerized Data Layer:** PostgreSQL must run reliably within a Docker container for easy local development and deployment.
 
+## Database Schema
+
+See [priv/repo/README.md](priv/repo/README.md) for the full entity-relationship diagram, index summary, and cascade rules.
+
 ## Getting Started
 
 *(Instructions for setting up the local development environment will be added here as the project progresses.)*
