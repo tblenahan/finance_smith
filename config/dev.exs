@@ -1,12 +1,13 @@
 import Config
 
 config :finance_smith, FinanceSmith.Repo,
-  username: "postgres",
-  password: "postgres",
-  hostname: "localhost",
-  database: "finance_smith_dev",
+  username: System.get_env("POSTGRES_USER", "postgres"),
+  password: System.get_env("POSTGRES_PASSWORD", "postgres"),
+  hostname: System.get_env("POSTGRES_HOST", "localhost"),
+  port: String.to_integer(System.get_env("POSTGRES_PORT", "5432")),
+  database: System.get_env("POSTGRES_DB", "finance_smith_dev"),
   show_sensitive_data_on_connection_error: true,
-  pool_size: 10
+  pool_size: String.to_integer(System.get_env("POSTGRES_POOL_SIZE", "10"))
 
 config :ash, policies: [show_policy_breakdowns?: true]
 
