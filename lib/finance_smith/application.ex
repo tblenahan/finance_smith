@@ -9,12 +9,16 @@ defmodule FinanceSmith.Application do
   def start(_type, _args) do
     children = [
       FinanceSmith.Repo,
-      FinanceSmith.Vault
+      FinanceSmith.Vault,
+      FinanceSmith.DataLake.B2.AuthServer,
+      {Oban, oban_config()}
     ]
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
     opts = [strategy: :one_for_one, name: FinanceSmith.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  defp oban_config do
+    Application.fetch_env!(:finance_smith, Oban)
   end
 end

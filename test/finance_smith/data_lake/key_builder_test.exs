@@ -1,0 +1,86 @@
+defmodule FinanceSmith.DataLake.KeyBuilderTest do
+  use ExUnit.Case, async: true
+
+  alias FinanceSmith.DataLake.KeyBuilder
+
+  defp fake_plaid_item do
+    %FinanceSmith.Banking.PlaidItem{
+      id: "01938d00-0000-7000-8000-000000000001",
+      plaid_item_id: "item_sandbox_abc123",
+      access_token: "access-sandbox-xxx",
+      status: :active,
+      user: %{
+        household_id: "01938d00-0000-7000-8000-000000000099"
+      }
+    }
+  end
+
+  describe "build/2" do
+    test "produces the expected time-partitioned key format" do
+      item = fake_plaid_item()
+      dt = ~U[2026-03-15 14:30:45.123456Z]
+
+      key = KeyBuilder.build(item, dt)
+
+      assert key ==
+               "plaid_sync/01938d00-0000-7000-8000-000000000099/item_sandbox_abc123/2026/03/2026-03-15T14-30-45.123456Z.json"
+    end
+
+    test "zero-pads single-digit months" do
+      item = fake_plaid_item()
+      dt = ~U[2026-01-05 08:00:00Z]
+
+      key = KeyBuilder.build(item, dt)
+      assert key =~ "/01/"
+    end
+
+    test "replaces colons with dashes in the timestamp" do
+      item = fake_plaid_item()
+      dt = ~U[2026-12-31 23:59:59Z]
+
+      key = KeyBuilder.build(item, dt)
+      refute key =~ ":"
+    end
+
+    test "uses household_id from the loaded user relationship" do
+      item = fake_plaid_item()
+      dt = ~U[2026-06-01 00:00:00Z]
+
+      key = KeyBuilder.build(item, dt)
+      assert key =~ "01938d00-0000-7000-8000-000000000099"
+    end
+
+    test "uses plaid_item_id (Plaid's ID, not our UUID)" do
+      item = fake_plaid_item()
+      dt = ~U[2026-06-01 00:00:00Z]
+
+      key = KeyBuilder.build(item, dt)
+      assert key =~ "item_sandbox_abc123"
+      refute key =~ item.id
+    end
+  end
+
+  describe "extract_plaid_item_id/1" do
+    test "extracts the Plaid item ID from a well-formed key" do
+      key = "plaid_sync/household-uuid/item_sandbox_abc123/2026/03/2026-03-15T14-30-45Z.json"
+      assert {:ok, "item_sandbox_abc123"} = KeyBuilder.extract_plaid_item_id(key)
+    end
+
+    test "returns :error for a key with missing segments" do
+      assert :error = KeyBuilder.extract_plaid_item_id("plaid_sync/household-only")
+    end
+
+    test "returns :error for a completely unrelated path" do
+      assert :error = KeyBuilder.extract_plaid_item_id("some/random/path.json")
+    end
+
+    test "returns :error for an empty string" do
+      assert :error = KeyBuilder.extract_plaid_item_id("")
+    end
+
+    test "handles keys with extra path segments" do
+      key = "plaid_sync/hh-id/item_id/2026/03/timestamp.json"
+      assert {:ok, "item_id"} = KeyBuilder.extract_plaid_item_id(key)
+    end
+  end
+end

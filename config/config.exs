@@ -47,6 +47,13 @@ config :spark,
     "Ash.Domain": [section_order: [:resources, :policies, :authorization, :domain, :execution]]
   ]
 
+config :finance_smith, Oban,
+  repo: FinanceSmith.Repo,
+  plugins: [
+    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7}
+  ],
+  queues: [data_lake: 5]
+
 config :plaid,
   root_uri: "https://sandbox.plaid.com/",
   client_id: System.get_env("PLAID_CLIENT_ID"),
