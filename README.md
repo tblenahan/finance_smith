@@ -59,7 +59,18 @@ created automatically by `docker/scripts/init-test-db.sh` on the first run.
 mix ash.setup
 ```
 
-**4. (Optional) Launch Adminer for a database UI**
+**4. (Optional) Enable pre-commit format check**
+
+To block commits when code is not formatted, point git at the repo’s hooks:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+After that, every commit runs `mix format --check-formatted`; if it fails, fix with
+`mix format` and try again.
+
+**5. (Optional) Launch Adminer for a database UI**
 
 ```bash
 docker compose --profile debug up -d
