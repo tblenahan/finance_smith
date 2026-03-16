@@ -3,13 +3,15 @@ name: finance-smith
 services:
   db:
     image: postgres:17
+    # Use host network to avoid veth pair creation (fixes "operation not supported"
+    # in environments where bridge networking is restricted, e.g. some WSL2/VM setups).
+    network_mode: host
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-finance_smith_dev}
       POSTGRES_TEST_DB: ${POSTGRES_TEST_DB:-finance_smith_test}
-    ports:
-      - '${POSTGRES_PORT:-5432}:5432'
+    # With network_mode: host, the container listens on host's 5432; no port mapping.
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/scripts/init-test-db.sh:/docker-entrypoint-initdb.d/init-test-db.sh:ro
@@ -24,6 +26,9 @@ services:
     profiles: ['debug']
     ports:
       - '8080:8080'
+    # When db uses network_mode: host, use server "host.docker.internal" in Adminer UI.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     depends_on:
       db:
         condition: service_healthy
