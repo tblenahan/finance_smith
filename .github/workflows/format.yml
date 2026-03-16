@@ -2,9 +2,9 @@ name: Format check
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, plaid-init]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, plaid-init]
 
 jobs:
   format:
