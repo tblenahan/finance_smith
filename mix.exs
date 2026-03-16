@@ -35,6 +35,8 @@ defmodule FinanceSmith.MixProject do
       {:ash_cloak, "~> 0.2.0"},
       {:cloak, "~> 1.1"},
       {:plaid, "~> 3.0", hex: :plaid_elixir},
+      {:req, "~> 0.5"},
+      {:oban, "~> 2.18"},
       {:igniter, "~> 0.6", only: [:dev]},
       {:usage_rules, "~> 1.2", only: [:dev]}
     ]

@@ -11,6 +11,12 @@ config :finance_smith, FinanceSmith.Repo,
 
 config :ash, policies: [show_policy_breakdowns?: true]
 
+config :finance_smith, :b2,
+  key_id: System.get_env("B2_KEY_ID", ""),
+  app_key: System.get_env("B2_APP_KEY", ""),
+  bucket_name: System.get_env("B2_BUCKET_NAME", ""),
+  webhook_signing_secret: System.get_env("B2_WEBHOOK_SIGNING_SECRET", "")
+
 config :finance_smith, FinanceSmith.Vault,
   ciphers: [
     default: {

@@ -47,6 +47,18 @@ config :spark,
     "Ash.Domain": [section_order: [:resources, :policies, :authorization, :domain, :execution]]
   ]
 
+config :finance_smith, Oban,
+  repo: FinanceSmith.Repo,
+  plugins: [
+    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
+    {Oban.Plugins.Cron,
+     crontab: [
+       # Daily sync at 2 AM — enqueues one SyncWorker per active PlaidItem
+       {"0 2 * * *", FinanceSmith.DataLake.DailySyncScheduler}
+     ]}
+  ],
+  queues: [data_lake: 5]
+
 config :plaid,
   root_uri: "https://sandbox.plaid.com/",
   client_id: System.get_env("PLAID_CLIENT_ID"),

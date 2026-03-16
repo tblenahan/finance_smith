@@ -35,4 +35,16 @@ if config_env() == :prod do
     secret:
       System.get_env("PLAID_SECRET") ||
         raise("environment variable PLAID_SECRET is missing.")
+
+  config :finance_smith, :b2,
+    key_id:
+      System.get_env("B2_KEY_ID") ||
+        raise("environment variable B2_KEY_ID is missing."),
+    app_key:
+      System.get_env("B2_APP_KEY") ||
+        raise("environment variable B2_APP_KEY is missing."),
+    bucket_name:
+      System.get_env("B2_BUCKET_NAME") ||
+        raise("environment variable B2_BUCKET_NAME is missing."),
+    webhook_signing_secret: System.get_env("B2_WEBHOOK_SIGNING_SECRET", "")
 end
