@@ -9,6 +9,20 @@ defmodule FinanceSmith.Banking.Plaid do
 
   Functions in the `Sandbox` submodule are intended for development and
   testing only and call the Plaid sandbox-specific endpoints.
+
+  ## Gotchas
+
+  - **Balance endpoint:** `get_balance/1` (accounts/balance/get) triggers a
+    real-time request to the institution and can take up to ~30s. The app
+    config sets `http_options: [recv_timeout: 30_000]` in `config/config.exs`;
+    do not rely on the default timeout.
+  - **Sandbox fire_webhook:** `Sandbox.fire_webhook/1` requires both
+    `webhook_type` and `webhook_code`, and the item must have a webhook URL
+    configured at creation time. When creating a sandbox public token for
+    webhook tests, pass `options: %{webhook: "https://..."}`.
+  - **Sandbox institution names:** In the Plaid sandbox, institution names are
+    fake (e.g. "First Platypus Bank" for `ins_109508`). Do not assert on
+    real-world names like "Chase" in tests.
   """
 
   alias Plaid.Client
