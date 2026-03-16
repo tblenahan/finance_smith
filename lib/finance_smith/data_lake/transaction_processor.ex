@@ -4,14 +4,14 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   ## Entry points
 
-  - `process/2` — primary path used by `SyncWorker`. Accepts a loaded
-    `PlaidItem` (with accounts) and a string-keyed payload map produced by
-    `Uploader.to_sync_payload/1`. No network I/O — works entirely from data
-    already in memory.
+  - `process_from_b2/1` — primary path used by `ProcessWorker`. Accepts a B2
+    object key, downloads the archived JSON, resolves the matching PlaidItem,
+    and delegates to `process/2`.
 
-  - `process_from_b2/1` — secondary path reserved for the future webhook
-    pipeline. Downloads the archived JSON from B2 by object key, parses it,
-    loads the matching PlaidItem, then delegates to `process/2`.
+  - `process/2` — low-level path called directly when a B2 upload or Oban
+    enqueue fails and in-memory fallback processing is needed. Accepts a loaded
+    `PlaidItem` (with accounts) and a string-keyed payload map produced by
+    `Uploader.to_sync_payload/1`. No network I/O.
 
   ## Processing flow
 
@@ -68,9 +68,8 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
   @doc """
   Downloads the B2 archive at `object_key`, parses it, and calls `process/2`.
 
-  Reserved for the future webhook-driven ingestion path. The PlaidItem is
-  resolved from the object key path, loaded with its accounts, then passed
-  to `process/2`.
+  The PlaidItem is resolved from the object key path, loaded with its accounts,
+  then passed to `process/2`. This is the primary path called by `ProcessWorker`.
 
   Returns `:ok` or raises on failure.
   """

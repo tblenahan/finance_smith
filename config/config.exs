@@ -50,12 +50,7 @@ config :spark,
 config :finance_smith, Oban,
   repo: FinanceSmith.Repo,
   plugins: [
-    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
-    {Oban.Plugins.Cron,
-     crontab: [
-       # Daily sync at 2 AM — enqueues one SyncWorker per active PlaidItem
-       {"0 2 * * *", FinanceSmith.DataLake.DailySyncScheduler}
-     ]}
+    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7}
   ],
   queues: [data_lake: 5]
 

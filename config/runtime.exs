@@ -45,6 +45,5 @@ if config_env() == :prod do
         raise("environment variable B2_APP_KEY is missing."),
     bucket_name:
       System.get_env("B2_BUCKET_NAME") ||
-        raise("environment variable B2_BUCKET_NAME is missing."),
-    webhook_signing_secret: System.get_env("B2_WEBHOOK_SIGNING_SECRET", "")
+        raise("environment variable B2_BUCKET_NAME is missing.")
 end

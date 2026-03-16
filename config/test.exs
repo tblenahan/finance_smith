@@ -20,9 +20,7 @@ config :finance_smith, Oban, testing: :inline
 config :finance_smith, :b2,
   key_id: System.get_env("B2_KEY_ID", "test-key-id"),
   app_key: System.get_env("B2_APP_KEY", "test-app-key"),
-  bucket_name: System.get_env("B2_BUCKET_NAME", "test-bucket"),
-  webhook_signing_secret:
-    System.get_env("B2_WEBHOOK_SIGNING_SECRET", "test-signing-secret-32-chars-long")
+  bucket_name: System.get_env("B2_BUCKET_NAME", "test-bucket")
 
 config :finance_smith, FinanceSmith.Vault,
   ciphers: [

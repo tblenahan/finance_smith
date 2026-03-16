@@ -5,19 +5,20 @@ defmodule FinanceSmith.DataLake.SyncWorker do
   Calls `Plaid.sync_transactions/1` in a cursor-based loop until all pages
   have been fetched. For each page it:
 
-  1. Archives the raw response to Backblaze B2 via `Uploader` (best-effort —
-     a B2 failure is logged but does not abort the sync).
-  2. Upserts transactions directly from the in-memory payload via
-     `TransactionProcessor`, avoiding a round-trip download from B2.
-  3. Persists the new cursor to `PlaidItem.next_cursor` so subsequent runs
+  1. Archives the raw response to Backblaze B2 via `Uploader`.
+  2. On a successful upload, enqueues a `ProcessWorker` job to download the
+     archived JSON and upsert transactions. This decouples the sync loop from
+     the database write — the sync advances immediately while processing runs
+     asynchronously.
+  3. On a failed upload (B2 unavailable), falls back to processing transactions
+     directly from the in-memory payload so that data is never lost.
+  4. Persists the new cursor to `PlaidItem.next_cursor` so subsequent runs
      resume where this one left off.
 
   ## Scheduling
 
-  - **Daily**: `DailySyncScheduler` enqueues one job per active `PlaidItem`
-    at the configured cron time (default: 2 AM).
   - **On-demand**: call `SyncWorker.enqueue(plaid_item_id)` from anywhere in
-    the app to trigger an immediate sync.
+    the app to trigger an immediate sync (e.g. after a user connects a new bank).
 
   ## Error handling
 
@@ -36,7 +37,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
 
   alias FinanceSmith.Banking
   alias FinanceSmith.Banking.PlaidItem
-  alias FinanceSmith.DataLake.{TransactionProcessor, Uploader}
+  alias FinanceSmith.DataLake.{ProcessWorker, TransactionProcessor, Uploader}
 
   require Ash.Query
   require Logger
@@ -82,8 +83,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
   defp handle_page(plaid_item, sync_response) do
     payload = Uploader.to_sync_payload(sync_response)
 
-    archive_to_b2(plaid_item, sync_response)
-    TransactionProcessor.process(plaid_item, payload)
+    dispatch_processing(plaid_item, sync_response, payload)
 
     updated_item = persist_cursor!(plaid_item, payload["next_cursor"])
 
@@ -96,17 +96,35 @@ defmodule FinanceSmith.DataLake.SyncWorker do
     end
   end
 
-  # --- B2 archival ----------------------------------------------------------
+  # --- Processing dispatch --------------------------------------------------
 
-  defp archive_to_b2(plaid_item, sync_response) do
+  # Uploads the raw response to B2 and enqueues a ProcessWorker job.
+  # Falls back to immediate in-memory processing if the upload fails.
+  defp dispatch_processing(plaid_item, sync_response, payload) do
     case Uploader.upload_sync_response(plaid_item, sync_response) do
       {:ok, object_key} ->
         Logger.debug("[SyncWorker] Archived to B2. plaid_item=#{plaid_item.id} key=#{object_key}")
 
+        case ProcessWorker.enqueue(object_key) do
+          {:ok, _job} ->
+            Logger.debug(
+              "[SyncWorker] Enqueued ProcessWorker. plaid_item=#{plaid_item.id} key=#{object_key}"
+            )
+
+          {:error, reason} ->
+            Logger.warning(
+              "[SyncWorker] ProcessWorker enqueue failed, falling back to in-memory processing. plaid_item=#{plaid_item.id} reason=#{inspect(reason)}"
+            )
+
+            TransactionProcessor.process(plaid_item, payload)
+        end
+
       {:error, reason} ->
         Logger.warning(
-          "[SyncWorker] B2 archive failed (sync continues). plaid_item=#{plaid_item.id} reason=#{inspect(reason)}"
+          "[SyncWorker] B2 upload failed, falling back to in-memory processing. plaid_item=#{plaid_item.id} reason=#{inspect(reason)}"
         )
+
+        TransactionProcessor.process(plaid_item, payload)
     end
   end
 
