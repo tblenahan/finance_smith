@@ -13,7 +13,10 @@ defmodule FinanceSmith.Banking.Transaction do
 
     custom_indexes do
       index [:account_id, :date], name: "transactions_account_id_date_index"
-      index [:account_id], where: "is_pending = true", name: "transactions_pending_by_account_index"
+
+      index [:account_id],
+        where: "is_pending = true",
+        name: "transactions_pending_by_account_index"
     end
   end
 

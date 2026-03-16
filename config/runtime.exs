@@ -23,9 +23,16 @@ if config_env() == :prod do
     ciphers: [
       default: {
         Cloak.Ciphers.AES.GCM,
-        tag: "AES.GCM.V1",
-        key: Base.decode64!(cloak_key),
-        iv_length: 12
+        tag: "AES.GCM.V1", key: Base.decode64!(cloak_key), iv_length: 12
       }
     ]
+
+  config :plaid,
+    root_uri: "https://production.plaid.com/",
+    client_id:
+      System.get_env("PLAID_CLIENT_ID") ||
+        raise("environment variable PLAID_CLIENT_ID is missing."),
+    secret:
+      System.get_env("PLAID_SECRET") ||
+        raise("environment variable PLAID_SECRET is missing.")
 end

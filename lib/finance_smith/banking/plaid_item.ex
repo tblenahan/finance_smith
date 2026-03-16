@@ -14,8 +14,8 @@ defmodule FinanceSmith.Banking.PlaidItem do
   end
 
   cloak do
-    vault FinanceSmith.Vault
-    attributes [:access_token]
+    vault(FinanceSmith.Vault)
+    attributes([:access_token])
   end
 
   actions do
