@@ -1,3 +1,41 @@
+<!-- finance-smith-start -->
+# Finance Smith — Project Rules
+
+## Role & Context
+You are an expert Elixir, Phoenix LiveView, and Ash Framework engineer building **Finance Smith**: a data-dense, secure, self-hosted household financial dashboard that aggregates and normalizes personal financial data (Plaid / SimpleFIN) into a single source of truth for comprehensive table views, filtering, and insights.
+
+## Personality & Copywriting (The "Agent Smith" Persona)
+UI and microcopy must reflect a **70/30** split: standard Fintech first, subtle Agent Smith (The Matrix) second.
+- **70% Standard Finance:** Use clear, unambiguous labels for critical UI (e.g. "Net Worth", "Recent Transactions", "Settings"). Never obscure financial data behind jokes.
+- **30% Agent Smith:** Use cold, calculated, deterministic phrasing only for state changes, errors, empty states, and feedback toasts.
+  - *Errors:* e.g. "We have a... discrepancy." / "What good is a transaction if you are unable to categorize it?"
+  - *Success:* e.g. "Sync complete. Inevitable." / "The ledger has fulfilled its purpose."
+  - *Empty states:* e.g. "There is no data here. Only an anomaly."
+  - *Tone:* Cold, precise, inevitable, slightly condescending but helpful. No exclamation points.
+
+## Visual Styling (Figma & Tailwind)
+Modern, highly usable Fintech first; subtle Matrix accents only.
+- **Base:** Clean, high-contrast, data-dense (Stripe/Linear-like). Standard text remains highly legible (`text-gray-100` in dark, `text-gray-900` in light).
+- **Matrix accents:** Deep obsidian/true black in dark mode (`bg-gray-950` or `bg-black`). Terminal green only for positive financial inputs, active Plaid connections, and success toasts (`text-emerald-500` or `text-green-500`). Do not style the whole app green-on-black.
+- **Typography:** Use `font-mono` for all monetary values, account numbers, and transaction IDs.
+
+## Core Tech Stack & UI Framework
+- **Backend/State:** Elixir, Phoenix LiveView (HEEx), Ash Framework. Use `ash_phoenix` patterns where the web layer is present.
+- **Styling:** Tailwind CSS + **PetalComponents** only. Do not use DaisyUI, Bootstrap, or custom CSS classes.
+- **Components:** If a Petal component exists for an element (e.g. `<.button>`, `<.table>`, `<.modal>`, `<.badge>`), use it instead of raw HTML.
+
+## Ash Framework & UI
+- **No Ecto in UI:** Do not use `Ecto.Changeset` directly in LiveViews or controllers.
+- **Forms:** Use `AshPhoenix.Form.for_action/3` (or `for_create` / `for_update`). In HEEx, map form inputs to Ash action arguments via Petal inputs: `<.input field={@form[:argument_name]} />`.
+
+## Figma MCP Integration
+When given a Figma URL to implement:
+1. Use the Figma MCP server to extract exact hex colors, typography sizes, and Auto Layout properties.
+2. Map Auto Layout constraints to Tailwind Flexbox/Grid utilities.
+3. Prefer **PetalComponents** HEEx components; keep the app data-dense and legible per the rules above.
+4. **Petal UI kit (design reference):** [Official Petal UI kit (Community)](https://www.figma.com/design/6zsNQ4e8VbV2CnYOrNOsfM/Official-Petal-UI-kit--Community-?m=auto&t=401qAro9Roe7whhp-6) — when implementing from this file, map Figma elements to the corresponding Petal components and Tailwind patterns used in the kit.
+<!-- finance-smith-end -->
+
 <!-- usage-rules-start -->
 <!-- ash-start -->
 ## ash usage
