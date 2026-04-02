@@ -1,5 +1,10 @@
 import Config
 
+config :finance_smith, FinanceSmithWeb.Endpoint,
+  http: [ip: {127, 0, 0, 1}, port: 4002],
+  secret_key_base: "test_secret_key_base_64_chars_minimum_required_for_phoenix_sessions_xx",
+  server: false
+
 config :finance_smith, FinanceSmith.Repo,
   username: System.get_env("POSTGRES_USER", "postgres"),
   password: System.get_env("POSTGRES_PASSWORD", "postgres"),

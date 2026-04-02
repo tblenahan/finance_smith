@@ -1,7 +1,7 @@
 defmodule FinanceSmithWeb.UserSessionController do
   use FinanceSmithWeb, :controller
 
-  def create(conn, %{"token" => token}) do
+  def create(conn, %{"token" => token}) when is_binary(token) do
     case Phoenix.Token.verify(
            FinanceSmithWeb.Endpoint,
            "user session",
@@ -28,5 +28,11 @@ defmodule FinanceSmithWeb.UserSessionController do
         |> put_flash(:error, "Invalid or expired link.")
         |> redirect(to: "/users/log_in")
     end
+  end
+
+  def create(conn, _params) do
+    conn
+    |> put_flash(:error, "Invalid or expired link.")
+    |> redirect(to: "/users/log_in")
   end
 end
