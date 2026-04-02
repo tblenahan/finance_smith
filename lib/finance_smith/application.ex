@@ -10,8 +10,10 @@ defmodule FinanceSmith.Application do
     children = [
       FinanceSmith.Repo,
       FinanceSmith.Vault,
+      {Phoenix.PubSub, name: FinanceSmith.PubSub},
       FinanceSmith.DataLake.B2.AuthServer,
-      {Oban, oban_config()}
+      {Oban, oban_config()},
+      FinanceSmithWeb.Endpoint
     ]
 
     opts = [strategy: :one_for_one, name: FinanceSmith.Supervisor]

@@ -1,0 +1,11 @@
+{
+  "name": "finance_smith_assets",
+  "private": true,
+  "scripts": {
+    "build:css": "npx tailwindcss -i ./css/app.css -o ../priv/static/assets/app.css",
+    "watch:css": "npx tailwindcss -i ./css/app.css -o ../priv/static/assets/app.css --watch"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.0"
+  }
+}

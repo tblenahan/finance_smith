@@ -4,6 +4,13 @@ config :finance_smith,
   ecto_repos: [FinanceSmith.Repo],
   ash_domains: [FinanceSmith.Identity, FinanceSmith.Banking]
 
+config :finance_smith, FinanceSmithWeb.Endpoint,
+  adapter: Bandit.PhoenixAdapter,
+  url: [host: "localhost", path: "/", port: 4000],
+  render_errors: [formats: [html: {FinanceSmithWeb.ErrorHTML, :html}]],
+  pubsub_server: FinanceSmith.PubSub,
+  live_view: [signing_salt: "finance_smith_live_view"]
+
 config :ash,
   allow_forbidden_field_for_relationships_by_default?: true,
   include_embedded_source_by_default?: false,
@@ -61,5 +68,14 @@ config :plaid,
   # Extend recv_timeout for endpoints that trigger real-time institution
   # requests (e.g. accounts/balance/get can take up to 30s).
   http_options: [recv_timeout: 30_000]
+
+config :esbuild,
+  version: "0.24.0",
+  default: [
+    # `cd` is project `assets/`; outdir must be relative to that (Phoenix serves `priv/static/assets`).
+    args: ~w(js/app.js --bundle --target=es2017 --outdir=../priv/static/assets),
+    cd: Path.expand("../assets", __DIR__),
+    env: %{"NODE_PATH" => Path.expand("../deps", __DIR__)}
+  ]
 
 import_config "#{config_env()}.exs"

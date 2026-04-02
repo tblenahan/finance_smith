@@ -1,0 +1,45 @@
+@import "../../deps/petal_components/assets/default.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Finance Smith dark overrides — Fintech-first on black/gray-950 */
+@layer components {
+  .dark .pc-text-input {
+    @apply bg-gray-950 border-gray-800 text-gray-100;
+  }
+  .dark .pc-text-input:focus {
+    @apply border-emerald-500 ring-emerald-500/20;
+  }
+  .dark .pc-select {
+    @apply bg-gray-950 border-gray-800 text-gray-100;
+  }
+  .dark .pc-label {
+    @apply text-gray-400;
+  }
+  .dark .pc-card {
+    @apply bg-gray-950;
+  }
+  .dark .pc-card--outline {
+    @apply border-gray-800;
+  }
+  .dark .pc-card__content {
+    @apply text-gray-300;
+  }
+  .dark .pc-alert--danger-light,
+  .dark .pc-alert--danger-soft {
+    @apply bg-red-950/30 text-red-400 border border-red-900/30;
+  }
+  .dark .pc-alert--warning-light,
+  .dark .pc-alert--warning-soft {
+    @apply bg-yellow-950/20 text-yellow-500 border border-yellow-900/30;
+  }
+  .dark .pc-alert--success-light,
+  .dark .pc-alert--success-soft {
+    @apply bg-emerald-950/20 text-emerald-400 border border-emerald-900/30;
+  }
+  .dark .pc-heading--color {
+    @apply text-gray-100;
+  }
+}

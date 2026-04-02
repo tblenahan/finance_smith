@@ -7,6 +7,7 @@ defmodule FinanceSmith.MixProject do
       version: "0.1.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
+      listeners: [Phoenix.CodeReloader],
       deps: deps(),
       usage_rules: [
         file: ".cursorrules",
@@ -21,7 +22,7 @@ defmodule FinanceSmith.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger],
+      extra_applications: [:logger, :crypto],
       mod: {FinanceSmith.Application, []}
     ]
   end
@@ -38,12 +39,35 @@ defmodule FinanceSmith.MixProject do
       {:req, "~> 0.5"},
       {:oban, "~> 2.18"},
       {:igniter, "~> 0.6", only: [:dev]},
-      {:usage_rules, "~> 1.2", only: [:dev]}
+      {:usage_rules, "~> 1.2", only: [:dev]},
+      # MFA & auth
+      {:nimble_totp, "~> 1.0"},
+      {:eqrcode, "~> 0.2"},
+      {:bcrypt_elixir, "~> 3.0"},
+      # Phoenix web layer (Phase 2+)
+      {:phoenix, "~> 1.7"},
+      {:phoenix_html, "~> 4.0"},
+      {:phoenix_live_view, "~> 1.0"},
+      {:phoenix_live_reload, "~> 1.5", only: :dev},
+      {:ash_phoenix, "~> 2.0"},
+      {:petal_components, "~> 2.0"},
+      {:heroicons, "~> 0.5"},
+      {:bandit, "~> 1.0"},
+      {:jason, "~> 1.0"},
+      {:dns_cluster, "~> 0.1"},
+      {:telemetry_metrics, "~> 1.0"},
+      {:telemetry_poller, "~> 1.0"},
+      {:gettext, "~> 0.24"},
+      {:esbuild, "~> 0.8", runtime: Mix.env() == :dev}
     ]
   end
 
   defp aliases() do
-    [test: ["ash.setup --quiet", "test"], setup: "ash.setup"]
+    [
+      test: ["ash.setup --quiet", "test"],
+      setup: "ash.setup",
+      "assets.deploy": ["cmd npm run --prefix assets build:css", "esbuild default --minify"]
+    ]
   end
 
   defp elixirc_paths(:test),

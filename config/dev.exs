@@ -1,5 +1,17 @@
 import Config
 
+config :finance_smith, FinanceSmithWeb.Endpoint,
+  http: [ip: {0, 0, 0, 0}, port: 4000],
+  debug_errors: true,
+  code_reloader: true,
+  check_origin: false,
+  static_cache_control: "max-age=0, private, must-revalidate",
+  watchers: [
+    {"npm", ["run", "watch:css", cd: Path.expand("../assets", __DIR__)]},
+    {:esbuild, {Esbuild, :install_and_run, [:default, ~w(--watch)]}}
+  ],
+  secret_key_base: "dev_secret_key_base_64_chars_minimum_required_for_phoenix_sessions_xx"
+
 config :finance_smith, FinanceSmith.Repo,
   username: System.get_env("POSTGRES_USER", "postgres"),
   password: System.get_env("POSTGRES_PASSWORD", "postgres"),
