@@ -4,22 +4,20 @@ defmodule FinanceSmith.Vault do
   @impl GenServer
   def init(config) do
     config =
-      Keyword.put(config, :ciphers,
-        default: {
-          Cloak.Ciphers.AES.GCM,
-          tag: "AES.GCM.V1", key: decode_env!("CLOAK_KEY"), iv_length: 12
-        }
-      )
+      case System.get_env("CLOAK_KEY") do
+        nil ->
+          # dev.exs / test.exs / runtime.exs supply ciphers; no env override needed
+          config
+
+        val ->
+          Keyword.put(config, :ciphers,
+            default: {
+              Cloak.Ciphers.AES.GCM,
+              tag: "AES.GCM.V1", key: Base.decode64!(val), iv_length: 12
+            }
+          )
+      end
 
     {:ok, config}
-  end
-
-  defp decode_env!(var) do
-    var
-    |> System.get_env()
-    |> case do
-      nil -> raise "environment variable #{var} is missing"
-      val -> Base.decode64!(val)
-    end
   end
 end
