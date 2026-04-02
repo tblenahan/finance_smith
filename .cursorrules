@@ -15,14 +15,16 @@ UI and microcopy must reflect a **70/30** split: standard Fintech first, subtle 
 
 ## Visual Styling (Figma & Tailwind)
 Modern, highly usable Fintech first; subtle Matrix accents only.
-- **Base:** Clean, high-contrast, data-dense (Stripe/Linear-like). Standard text remains highly legible (`text-gray-100` in dark, `text-gray-900` in light).
-- **Matrix accents:** Deep obsidian/true black in dark mode (`bg-gray-950` or `bg-black`). Terminal green only for positive financial inputs, active Plaid connections, and success toasts (`text-emerald-500` or `text-green-500`). Do not style the whole app green-on-black.
-- **Typography:** Use `font-mono` for all monetary values, account numbers, and transaction IDs.
+- **Base Layering & Borders:** Rely on 1px borders rather than shadows for depth. The root background is `bg-black`. Cards, modals, and containers should be `bg-gray-950` with tight `border-gray-800` borders. 
+- **Matrix Accents:** Terminal green is only for positive financial inputs, active Plaid connections, and success states (`text-emerald-500`). Do not style the whole app green-on-black. Standard text remains highly legible (`text-gray-100` in dark).
+- **Typography & Micro-copy:** - Use `font-mono` for all monetary values, account numbers, and transaction IDs.
+  - **Use `font-mono text-[10px] uppercase tracking-widest` (or `text-xs`) for structural micro-copy: table headers, small badges, input labels, and buttons.**
+  - **Inputs requiring specific formats (like MFA tokens) should use tight centering and wide tracking (e.g., `tracking-[0.5em]`).**
 
 ## Core Tech Stack & UI Framework
 - **Backend/State:** Elixir, Phoenix LiveView (HEEx), Ash Framework. Use `ash_phoenix` patterns where the web layer is present.
 - **Styling:** Tailwind CSS + **PetalComponents** only. Do not use DaisyUI, Bootstrap, or custom CSS classes.
-- **Components:** If a Petal component exists for an element (e.g. `<.button>`, `<.table>`, `<.modal>`, `<.badge>`), use it instead of raw HTML.
+- **Petal Overrides:** If a Petal component exists (`<.button>`, `<.table>`, `<.card>`, `<.badge>`), you MUST use it. **However, you must aggressively override Petal's default classes using the `class` attribute to enforce the dark, border-heavy `bg-gray-950 border-gray-800` aesthetic (e.g., `<.card variant="outline" class="bg-gray-950 border-gray-800">`).**
 
 ## Ash Framework & UI
 - **No Ecto in UI:** Do not use `Ecto.Changeset` directly in LiveViews or controllers.
