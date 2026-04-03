@@ -155,6 +155,37 @@ defmodule FinanceSmith.Identity.UserTest do
       assert {:error, %Ash.Error.Invalid{}} =
                Identity.enable_mfa(user, "123456", authorize?: false)
     end
+
+    test "recovery_codes calculation is immediately loadable and JSON-decodable after the action",
+         %{user: user, raw_secret: raw_secret} do
+      # Regression: MfaSetupLive previously crashed with
+      # "ArgumentError: not an iodata term" because Jason.decode! was called on
+      # #Ash.NotLoaded<:calculation> — the calculation must be explicitly loaded
+      # on the action result before access.
+      valid_code = NimbleTOTP.verification_code(raw_secret)
+      {:ok, enabled_user} = Identity.enable_mfa(user, valid_code, authorize?: false)
+
+      loaded = Ash.load!(enabled_user, :recovery_codes, authorize?: false)
+      assert is_binary(loaded.recovery_codes)
+
+      codes = Jason.decode!(loaded.recovery_codes)
+      assert is_list(codes)
+      assert length(codes) == 10
+      assert Enum.all?(codes, &is_binary/1)
+    end
+
+    test "mfa_enabled is persisted to the database (not just in-memory)", %{
+      user: user,
+      raw_secret: raw_secret
+    } do
+      # Regression: force_change_attribute must be used inside before_action or
+      # the attribute change is silently dropped post-validation.
+      valid_code = NimbleTOTP.verification_code(raw_secret)
+      {:ok, _} = Identity.enable_mfa(user, valid_code, authorize?: false)
+
+      refreshed = Ash.get!(FinanceSmith.Identity.User, user.id, authorize?: false)
+      assert refreshed.mfa_enabled == true
+    end
   end
 
   # ---------------------------------------------------------------------------

@@ -31,6 +31,7 @@ defmodule FinanceSmith.MixProject do
   defp deps do
     [
       {:sourceror, "~> 1.8", only: [:dev, :test]},
+      {:lazy_html, ">= 0.0.0", only: :test},
       {:ash_postgres, "~> 2.0"},
       {:ash, "~> 3.0"},
       {:ash_cloak, "~> 0.2.0"},
