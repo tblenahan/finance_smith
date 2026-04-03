@@ -131,6 +131,7 @@ defmodule FinanceSmithWeb.MfaSetupLive do
 
     case Identity.enable_mfa(user, code, authorize?: false) do
       {:ok, updated} ->
+        updated = Ash.load!(updated, :recovery_codes, authorize?: false)
         codes = Jason.decode!(updated.recovery_codes)
 
         {:noreply,

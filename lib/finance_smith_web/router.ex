@@ -26,7 +26,7 @@ defmodule FinanceSmithWeb.Router do
     live("/users/log_in", UserLoginLive, :new)
     live("/users/register", UserRegistrationLive, :new)
     get("/users/session", UserSessionController, :create)
-    delete("/users/log_out", UserAuth, :delete)
+    delete("/users/log_out", UserSessionController, :delete)
   end
 
   scope "/users/mfa", FinanceSmithWeb do

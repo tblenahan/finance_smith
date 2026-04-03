@@ -52,16 +52,6 @@ defmodule FinanceSmithWeb.UserAuth do
     end
   end
 
-  @doc """
-  Callback for DELETE /users/log_out. Logs the user out and redirects.
-  """
-  def delete(conn, _opts) do
-    conn
-    |> configure_session(drop: true)
-    |> put_flash(:info, "Disconnected.")
-    |> redirect(to: "/")
-  end
-
   def log_in_user(conn, user) do
     if user.mfa_enabled do
       conn

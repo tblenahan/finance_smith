@@ -35,4 +35,11 @@ defmodule FinanceSmithWeb.UserSessionController do
     |> put_flash(:error, "Invalid or expired link.")
     |> redirect(to: "/users/log_in")
   end
+
+  def delete(conn, _params) do
+    conn
+    |> configure_session(drop: true)
+    |> put_flash(:info, "Disconnected.")
+    |> redirect(to: "/users/log_in")
+  end
 end

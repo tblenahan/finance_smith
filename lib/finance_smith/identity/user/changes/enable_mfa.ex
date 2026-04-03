@@ -31,7 +31,7 @@ defmodule FinanceSmith.Identity.User.Changes.EnableMfa do
           json_codes = Jason.encode!(recovery_codes)
 
           cs
-          |> Ash.Changeset.change_attribute(:mfa_enabled, true)
+          |> Ash.Changeset.force_change_attribute(:mfa_enabled, true)
           |> AshCloak.encrypt_and_set(:recovery_codes, json_codes)
         else
           Ash.Changeset.add_error(cs, "Invalid verification code")
