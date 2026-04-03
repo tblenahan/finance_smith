@@ -4,9 +4,9 @@ defmodule FinanceSmithWeb.MfaSetupLive do
   alias FinanceSmith.Identity
   alias EQRCode
 
-  def mount(_params, session, socket) do
-    user = FinanceSmithWeb.Plugs.LiveAuth.get_user_from_session(session)
-    user = user && Ash.load!(user, :mfa_secret)
+  def mount(_params, _session, socket) do
+    user = socket.assigns[:current_user]
+    user = user && Ash.load!(user, :mfa_secret, actor: user)
     has_secret = user && user.mfa_secret && user.mfa_secret != ""
 
     socket =
@@ -110,9 +110,9 @@ defmodule FinanceSmithWeb.MfaSetupLive do
   def handle_event("generate_secret", _params, socket) do
     user = socket.assigns.user
 
-    case Identity.generate_mfa_secret(user, authorize?: false) do
+    case Identity.generate_mfa_secret(user, actor: user) do
       {:ok, updated} ->
-        updated = Ash.load!(updated, :mfa_secret)
+        updated = Ash.load!(updated, :mfa_secret, actor: user)
 
         {:noreply,
          socket
@@ -129,9 +129,9 @@ defmodule FinanceSmithWeb.MfaSetupLive do
     user = socket.assigns.user
     code = String.trim(code)
 
-    case Identity.enable_mfa(user, code, authorize?: false) do
+    case Identity.enable_mfa(user, code, actor: user) do
       {:ok, updated} ->
-        updated = Ash.load!(updated, :recovery_codes, authorize?: false)
+        updated = Ash.load!(updated, :recovery_codes, actor: user)
         codes = Jason.decode!(updated.recovery_codes)
 
         {:noreply,

@@ -1,13 +1,10 @@
 defmodule FinanceSmithWeb.DashboardLive do
   use FinanceSmithWeb, :live_view
 
-  def mount(_params, session, socket) do
-    current_user = FinanceSmithWeb.Plugs.LiveAuth.get_user_from_session(session)
-
+  def mount(_params, _session, socket) do
     {:ok,
      socket
      |> assign(:page_title, "The Ledger")
-     |> assign(:current_user, current_user)
      |> assign(:current_nav, :dashboard)}
   end
 

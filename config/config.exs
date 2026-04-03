@@ -1,5 +1,39 @@
 import Config
 
+# Load project `.env` for dev/test before imported configs read `System.get_env/1`.
+# Variables already set in the process environment are not overwritten.
+if config_env() in [:dev, :test] do
+  dotenv_path = Path.expand("../.env", __DIR__)
+
+  if File.exists?(dotenv_path) do
+    dotenv_path
+    |> File.read!()
+    |> String.split("\n")
+    |> Enum.each(fn line ->
+      line = String.trim(line)
+
+      cond do
+        line == "" or String.starts_with?(line, "#") ->
+          :ok
+
+        true ->
+          case String.split(line, "=", parts: 2) do
+            [key, val] ->
+              key = String.trim(key)
+              val = String.trim(val)
+
+              if System.get_env(key) == nil do
+                System.put_env(key, val)
+              end
+
+            _ ->
+              :ok
+          end
+      end
+    end)
+  end
+end
+
 config :finance_smith,
   ecto_repos: [FinanceSmith.Repo],
   ash_domains: [FinanceSmith.Identity, FinanceSmith.Banking]

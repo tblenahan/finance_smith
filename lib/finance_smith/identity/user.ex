@@ -2,7 +2,8 @@ defmodule FinanceSmith.Identity.User do
   use Ash.Resource,
     domain: FinanceSmith.Identity,
     data_layer: AshPostgres.DataLayer,
-    extensions: [AshCloak]
+    extensions: [AshCloak],
+    authorizers: [Ash.Policy.Authorizer]
 
   postgres do
     table "users"
@@ -26,12 +27,14 @@ defmodule FinanceSmith.Identity.User do
 
       argument :password, :string do
         allow_nil? false
+        constraints min_length: 12
       end
 
       argument :household_name, :string do
         default "My Household"
       end
 
+      validate FinanceSmith.Identity.User.Validations.PasswordComplexity
       change FinanceSmith.Identity.User.Changes.Register
     end
 
@@ -71,7 +74,57 @@ defmodule FinanceSmith.Identity.User do
         allow_nil? false
       end
 
+      change FinanceSmith.Identity.User.Changes.CheckLockout
       change FinanceSmith.Identity.User.Changes.VerifyMfaLogin
+      change FinanceSmith.Identity.User.Changes.TrackAuthFailure
+    end
+
+    update :record_failed_login do
+      description "Increments failed_auth_attempts and sets locked_until after the threshold."
+      require_atomic? false
+      change FinanceSmith.Identity.User.Changes.RecordFailedLogin
+    end
+
+    update :clear_auth_lockout do
+      description "Resets failed_auth_attempts and locked_until on successful login."
+      require_atomic? false
+
+      change set_attribute(:failed_auth_attempts, 0)
+      change set_attribute(:locked_until, nil)
+    end
+  end
+
+  policies do
+    # Registration and sign-in have no actor — anyone may attempt them.
+    bypass action(:register) do
+      authorize_if always()
+    end
+
+    bypass action(:sign_in) do
+      authorize_if always()
+    end
+
+    # Lockout management is called internally by verify_sign_in/2 (system context).
+    bypass action([:record_failed_login, :clear_auth_lockout]) do
+      authorize_if always()
+    end
+
+    # A user may only manage their own MFA settings.
+    policy action(:generate_mfa_secret) do
+      authorize_if expr(id == ^actor(:id))
+    end
+
+    policy action(:enable_mfa) do
+      authorize_if expr(id == ^actor(:id))
+    end
+
+    policy action(:verify_mfa_login) do
+      authorize_if expr(id == ^actor(:id))
+    end
+
+    # A user may only read their own record.
+    policy action_type(:read) do
+      authorize_if expr(id == ^actor(:id))
     end
   end
 
@@ -91,6 +144,13 @@ defmodule FinanceSmith.Identity.User do
       allow_nil? false
       default false
     end
+
+    attribute :failed_auth_attempts, :integer do
+      allow_nil? false
+      default 0
+    end
+
+    attribute :locked_until, :utc_datetime_usec
 
     attribute :mfa_secret, :string do
       sensitive? true

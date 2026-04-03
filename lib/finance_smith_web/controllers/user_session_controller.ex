@@ -8,6 +8,7 @@ defmodule FinanceSmithWeb.UserSessionController do
            token,
            max_age: 300
          ) do
+      # Token from UserLoginLive — mfa_enabled indicates whether MFA step is needed.
       {:ok, %{user_id: user_id, mfa_enabled: mfa_enabled}} ->
         if mfa_enabled do
           conn
@@ -22,6 +23,14 @@ defmodule FinanceSmithWeb.UserSessionController do
           |> put_flash(:info, "Sync complete. Inevitable.")
           |> redirect(to: "/dashboard")
         end
+
+      # Token from MfaVerifyLive — mfa_verified means full auth is complete.
+      {:ok, %{user_id: user_id, mfa_verified: true}} ->
+        conn
+        |> put_session(:user_id, user_id)
+        |> delete_session(:mfa_pending_user_id)
+        |> put_flash(:info, "Sync complete. Inevitable.")
+        |> redirect(to: "/dashboard")
 
       _ ->
         conn

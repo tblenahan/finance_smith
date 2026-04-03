@@ -49,6 +49,26 @@ defmodule FinanceSmith.Identity.UserTest do
       assert {:error, %Ash.Error.Invalid{}} =
                Identity.register(email, "AnotherPass1!", authorize?: false)
     end
+
+    test "rejects a password shorter than 12 characters" do
+      assert {:error, %Ash.Error.Invalid{}} =
+               Identity.register(unique_email(), "Short1!", authorize?: false)
+    end
+
+    test "rejects a whitespace-only password" do
+      assert {:error, %Ash.Error.Invalid{}} =
+               Identity.register(unique_email(), "            ", authorize?: false)
+    end
+
+    test "rejects a password with no digits" do
+      assert {:error, %Ash.Error.Invalid{}} =
+               Identity.register(unique_email(), "NoDigitsHereAtAll", authorize?: false)
+    end
+
+    test "rejects a password with no letters" do
+      assert {:error, %Ash.Error.Invalid{}} =
+               Identity.register(unique_email(), "123456789012", authorize?: false)
+    end
   end
 
   # ---------------------------------------------------------------------------

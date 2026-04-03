@@ -15,6 +15,8 @@ defmodule FinanceSmith.Identity.User.Changes.VerifyMfaLogin do
     code = if raw_code, do: String.trim(raw_code), else: raw_code
 
     Ash.Changeset.before_action(changeset, fn cs ->
+      # authorize?: false is correct here — this load is internal to the action's
+      # own transaction. The action-level policy is the authorization boundary.
       loaded = Ash.load!(cs.data, [:mfa_secret, :recovery_codes], authorize?: false)
       base32_secret = loaded.mfa_secret
       recovery_codes_json = loaded.recovery_codes

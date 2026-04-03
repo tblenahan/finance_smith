@@ -10,6 +10,7 @@ defmodule FinanceSmithWeb.UserLoginLive do
       |> assign(:email, "")
       |> assign(:password, "")
       |> assign(:error, nil)
+      |> assign(:token, nil)
       |> assign(:trigger_action, false)
 
     {:ok, socket}
@@ -58,10 +59,21 @@ defmodule FinanceSmithWeb.UserLoginLive do
 
       <p class="text-center text-xs font-mono text-gray-600">
         No credentials on file?
-        <.link href={~p"/users/register"} class="text-emerald-500 hover:text-emerald-400">
-          Initialize
-        </.link>
-      </p>
+      <.link href={~p"/users/register"} class="text-emerald-500 hover:text-emerald-400">
+        Initialize
+      </.link>
+    </p>
+
+    <.form
+      :if={@token}
+      for={%{}}
+      as={:session}
+      action={~p"/users/session"}
+      method="post"
+      phx-trigger-action={@trigger_action}
+    >
+      <input type="hidden" name="token" value={@token} />
+    </.form>
     </div>
     """
   end
@@ -87,13 +99,19 @@ defmodule FinanceSmithWeb.UserLoginLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Credentials accepted.")
-         |> redirect(to: "/users/session?token=#{token}")}
+         |> assign(:token, token)
+         |> assign(:trigger_action, true)}
 
       {:error, :invalid_credentials} ->
         {:noreply,
          socket
          |> assign(:error, "We have a... discrepancy. Invalid email or password.")
+         |> assign(:password, "")}
+
+      {:error, {:locked, seconds}} ->
+        {:noreply,
+         socket
+         |> assign(:error, "Quarantine protocol engaged. Try again in #{seconds} seconds.")
          |> assign(:password, "")}
     end
   end

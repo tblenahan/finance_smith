@@ -25,20 +25,27 @@ defmodule FinanceSmithWeb.Router do
     get("/", PageController, :home)
     live("/users/log_in", UserLoginLive, :new)
     live("/users/register", UserRegistrationLive, :new)
-    get("/users/session", UserSessionController, :create)
+    post("/users/session", UserSessionController, :create)
     delete("/users/log_out", UserSessionController, :delete)
   end
 
   scope "/users/mfa", FinanceSmithWeb do
     pipe_through([:browser, FinanceSmithWeb.Plugs.RequireMfaPending])
-    live("/", MfaVerifyLive, :index)
+
+    live_session :mfa_pending,
+      on_mount: [{FinanceSmithWeb.Plugs.LiveAuth, :mfa_pending}] do
+      live("/", MfaVerifyLive, :index)
+    end
   end
 
   scope "/", FinanceSmithWeb do
     pipe_through([:browser, :require_authenticated, :require_mfa_verified])
 
-    live("/dashboard", DashboardLive, :index)
-    live("/users/settings", UserSettingsLive, :index)
-    live("/users/settings/mfa", MfaSetupLive, :index)
+    live_session :authenticated,
+      on_mount: [{FinanceSmithWeb.Plugs.LiveAuth, :default}] do
+      live("/dashboard", DashboardLive, :index)
+      live("/users/settings", UserSettingsLive, :index)
+      live("/users/settings/mfa", MfaSetupLive, :index)
+    end
   end
 end

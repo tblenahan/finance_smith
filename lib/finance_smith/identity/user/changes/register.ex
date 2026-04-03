@@ -6,14 +6,16 @@ defmodule FinanceSmith.Identity.User.Changes.Register do
 
   @impl true
   def change(changeset, _opts, _context) do
-    password = Ash.Changeset.get_argument(changeset, :password)
     household_name = Ash.Changeset.get_argument(changeset, :household_name) || "My Household"
 
-    hashed = Bcrypt.hash_pwd_salt(password)
+    # Hash password and create household inside before_action so that Ash
+    # argument validations (min_length, complexity) run first. If validation
+    # fails the hook never executes, preventing Bcrypt from receiving nil.
+    Ash.Changeset.before_action(changeset, fn cs ->
+      password = Ash.Changeset.get_argument(cs, :password)
+      hashed = Bcrypt.hash_pwd_salt(password)
+      cs = Ash.Changeset.change_attribute(cs, :password_hash, hashed)
 
-    changeset
-    |> Ash.Changeset.change_attribute(:password_hash, hashed)
-    |> Ash.Changeset.before_action(fn cs ->
       household_result =
         FinanceSmith.Identity.Household
         |> Ash.Changeset.for_create(:create, %{name: household_name})

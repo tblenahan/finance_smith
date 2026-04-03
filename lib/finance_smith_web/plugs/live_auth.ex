@@ -1,12 +1,17 @@
 defmodule FinanceSmithWeb.Plugs.LiveAuth do
   @moduledoc """
-  On-mount hooks that assign :current_user or :mfa_pending_user from session.
+  On-mount hooks that assign :current_user or :mfa_pending_user from session,
+  and also set :actor on the socket for use with Ash authorization.
   """
   import Phoenix.Component, only: [assign: 2]
 
   def on_mount(:default, _params, session, socket) do
     user = get_user_from_session(session)
-    {:cont, assign(socket, current_user: user)}
+
+    {:cont,
+     socket
+     |> assign(current_user: user)
+     |> assign(actor: user)}
   end
 
   def on_mount(:mfa_pending, _params, session, socket) do

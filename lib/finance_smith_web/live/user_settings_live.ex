@@ -1,14 +1,12 @@
 defmodule FinanceSmithWeb.UserSettingsLive do
   use FinanceSmithWeb, :live_view
 
-  def mount(_params, session, socket) do
-    current_user = FinanceSmithWeb.Plugs.LiveAuth.get_user_from_session(session)
-    mfa_enabled = current_user && current_user.mfa_enabled
+  def mount(_params, _session, socket) do
+    mfa_enabled = socket.assigns[:current_user] && socket.assigns.current_user.mfa_enabled
 
     {:ok,
      socket
      |> assign(:page_title, "System Parameters")
-     |> assign(:current_user, current_user)
      |> assign(:mfa_enabled, mfa_enabled)
      |> assign(:current_nav, :settings)}
   end

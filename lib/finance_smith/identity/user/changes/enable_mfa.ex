@@ -18,6 +18,8 @@ defmodule FinanceSmith.Identity.User.Changes.EnableMfa do
     code = Ash.Changeset.get_argument(changeset, :code)
 
     Ash.Changeset.before_action(changeset, fn cs ->
+      # authorize?: false is correct here — this load is internal to the action's
+      # own transaction. The action-level policy is the authorization boundary.
       loaded = Ash.load!(cs.data, :mfa_secret, authorize?: false)
       base32_secret = loaded.mfa_secret
 

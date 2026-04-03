@@ -27,12 +27,12 @@ defmodule FinanceSmithWeb.UserSessionControllerTest do
   # Non-MFA user flow
   # ---------------------------------------------------------------------------
 
-  describe "GET /users/session (non-MFA user)" do
+  describe "POST /users/session (non-MFA user)" do
     test "sets user_id in session and redirects to /dashboard", %{conn: conn} do
       user = create_user!()
       token = sign_token(%{user_id: user.id, mfa_enabled: false})
 
-      conn = get(conn, "/users/session?token=#{token}")
+      conn = post(conn, "/users/session", %{token: token})
 
       assert redirected_to(conn) == "/dashboard"
       assert get_session(conn, :user_id) == user.id
@@ -44,12 +44,12 @@ defmodule FinanceSmithWeb.UserSessionControllerTest do
   # MFA user flow
   # ---------------------------------------------------------------------------
 
-  describe "GET /users/session (MFA-enabled user)" do
+  describe "POST /users/session (MFA-enabled user)" do
     test "sets mfa_pending_user_id in session and redirects to /users/mfa", %{conn: conn} do
       user = create_user!()
       token = sign_token(%{user_id: user.id, mfa_enabled: true})
 
-      conn = get(conn, "/users/session?token=#{token}")
+      conn = post(conn, "/users/session", %{token: token})
 
       assert redirected_to(conn) == "/users/mfa"
       assert get_session(conn, :mfa_pending_user_id) == user.id
@@ -58,12 +58,29 @@ defmodule FinanceSmithWeb.UserSessionControllerTest do
   end
 
   # ---------------------------------------------------------------------------
+  # MFA verified flow
+  # ---------------------------------------------------------------------------
+
+  describe "POST /users/session (mfa_verified token)" do
+    test "sets user_id in session and redirects to /dashboard", %{conn: conn} do
+      user = create_user!()
+      token = sign_token(%{user_id: user.id, mfa_verified: true})
+
+      conn = post(conn, "/users/session", %{token: token})
+
+      assert redirected_to(conn) == "/dashboard"
+      assert get_session(conn, :user_id) == user.id
+      assert get_session(conn, :mfa_pending_user_id) == nil
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Invalid / expired token
   # ---------------------------------------------------------------------------
 
-  describe "GET /users/session (bad token)" do
+  describe "POST /users/session (bad token)" do
     test "redirects to /users/log_in for an invalid token", %{conn: conn} do
-      conn = get(conn, "/users/session?token=totally_invalid_token")
+      conn = post(conn, "/users/session", %{token: "totally_invalid_token"})
 
       assert redirected_to(conn) == "/users/log_in"
     end
@@ -72,13 +89,13 @@ defmodule FinanceSmithWeb.UserSessionControllerTest do
       user = create_user!()
       token = expired_token(user.id)
 
-      conn = get(conn, "/users/session?token=#{token}")
+      conn = post(conn, "/users/session", %{token: token})
 
       assert redirected_to(conn) == "/users/log_in"
     end
 
     test "redirects to /users/log_in when token parameter is absent", %{conn: conn} do
-      conn = get(conn, "/users/session")
+      conn = post(conn, "/users/session", %{})
 
       assert redirected_to(conn) == "/users/log_in"
     end
