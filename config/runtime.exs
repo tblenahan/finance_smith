@@ -1,6 +1,17 @@
 import Config
 
 if config_env() == :prod do
+  secret_key_base =
+    System.get_env("SECRET_KEY_BASE") ||
+      raise """
+      environment variable SECRET_KEY_BASE is missing.
+      Generate one with: mix phx.gen.secret
+      """
+
+  config :finance_smith, FinanceSmithWeb.Endpoint,
+    http: [port: String.to_integer(System.get_env("PORT") || "4000")],
+    secret_key_base: secret_key_base
+
   database_url =
     System.get_env("DATABASE_URL") ||
       raise """

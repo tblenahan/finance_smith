@@ -9,7 +9,12 @@ defmodule FinanceSmith.Identity.Household do
   end
 
   actions do
-    defaults [:read, :destroy, create: :*, update: :*]
+    defaults [:read, :destroy, update: :*]
+
+    create :create do
+      primary? true
+      accept [:name]
+    end
   end
 
   attributes do

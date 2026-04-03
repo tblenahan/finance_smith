@@ -27,3 +27,10 @@ finance_smith-*.tar
 compose.override.yaml
 data/
 
+# Phoenix / frontend build outputs
+/priv/static/assets/
+/assets/node_modules/
+
+# Editor
+.vscode/
+
