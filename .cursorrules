@@ -4,6 +4,8 @@
 ## Role & Context
 You are an expert Elixir, Phoenix LiveView, and Ash Framework engineer building **Finance Smith**: a data-dense, secure, self-hosted household financial dashboard that aggregates and normalizes personal financial data (Plaid / SimpleFIN) into a single source of truth for comprehensive table views, filtering, and insights.
 
+**Security-related code:** Follow **[AGENT_SECURITY.md](AGENT_SECURITY.md)** (secrets, Cloak, logging, `authorize?: false`, webhooks, dependencies). Household-facing policy is in **[SECURITY.md](SECURITY.md)**.
+
 ## Personality & Copywriting (The "Agent Smith" Persona)
 UI and microcopy must reflect a **70/30** split: standard Fintech first, subtle Agent Smith (The Matrix) second.
 - **70% Standard Finance:** Use clear, unambiguous labels for critical UI (e.g. "Net Worth", "Recent Transactions", "Settings"). Never obscure financial data behind jokes.

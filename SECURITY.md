@@ -1,301 +1,222 @@
 # Security Policy & Architecture
 
+This document is for **household operators, deployers, and security reviewers**: what Finance Smith does to protect data, what you must configure, and what remains on the roadmap.
+
+**Developers and AI coding tools** must follow **[AGENT_SECURITY.md](AGENT_SECURITY.md)** for implementation rules (secrets, logging, Cloak, `authorize?: false`, dependencies).
+
+---
+
 ## Overview
 
-Finance Smith is a strictly scoped, privately hosted financial data pipeline. It aggregates personal transaction data from external providers (Plaid) into a self-managed PostgreSQL database, with raw payloads archived to Backblaze B2 object storage. The application is designed for single-household use and is never intended to be a multi-tenant SaaS product.
+Finance Smith is a strictly scoped, privately hosted financial application. It aggregates personal transaction data from external providers (Plaid) into a self-managed PostgreSQL database, with optional archival of raw payloads to Backblaze B2. It is designed for **single-household** use and is not a multi-tenant SaaS product.
 
-The foundational security principles are:
+The application **runs an HTTP server** (Phoenix / Bandit) for the web UI: registration, sign-in, optional TOTP multi-factor authentication (MFA), and authenticated LiveView pages. **TLS termination** for internet-facing deployments is an **operator responsibility** (reverse proxy); see [§5](#5-infrastructure--network-security).
 
-- **Data sovereignty:** All financial data is owned and stored by the household operator, never shared with third parties beyond the minimum required for API integrations.
-- **Strict secret isolation:** No credentials are embedded in the codebase. All secrets are injected from the host environment at runtime.
-- **Least privilege:** Every external API integration is configured with the minimum permissions required for its function.
-- **Defense in depth for sensitive tokens:** The Plaid `access_token` (which grants permanent read access to bank accounts) is encrypted at rest and only decrypted in memory at the moment of use.
+Foundational principles:
+
+- **Data sovereignty:** Financial data is owned and stored by the household operator, shared with third parties only as required for chosen integrations (e.g. Plaid).
+- **Strict secret isolation:** Credentials are not embedded in the codebase; secrets are supplied via the host environment.
+- **Least privilege:** External integrations use minimum necessary permissions (e.g. scoped B2 application keys).
+- **Defense in depth for sensitive tokens:** The Plaid `access_token` is encrypted at rest and used only where the sync pipeline needs it.
 
 ---
 
-## Status Legend
-
-Each control in this document is tagged to indicate its current implementation state:
+## Status legend
 
 | Tag | Meaning |
-|---|---|
-| `[ACTIVE]` | Implemented and operational in the current codebase. |
-| `[PLANNED]` | Defined as a required security control; not yet implemented. |
+|-----|---------|
+| `[ACTIVE]` | Implemented in the current codebase. |
+| `[PLANNED]` | Agreed security control **not** yet implemented; do not assume it is enforced. |
 
-**Important for AI agents and contributors:** Do not treat `[PLANNED]` items as if they exist. Do not generate code that assumes these controls are active. When implementing a `[PLANNED]` item, update this document to change its tag to `[ACTIVE]` and add a reference to the relevant module.
+Contributors should keep tags aligned with the code. Coding constraints for agents live in [AGENT_SECURITY.md](AGENT_SECURITY.md).
 
 ---
 
-## 1. Secret Management & Environment Configuration
+## 1. Secret management & environment configuration
 
-### `[ACTIVE]` Environment-Based Secret Injection
+### `[ACTIVE]` Environment-based secret injection
 
-All external API credentials and cryptographic keys are isolated from the application codebase entirely.
-
-- **Storage:** Secrets are stored on the deployment host in a `.env` file. This file is listed in `.gitignore` and must never be committed to version control.
-- **File permissions:** The `.env` file must be restricted to the OS user running the Elixir release:
+- **Storage:** Secrets are typically provided via a `.env` file on the host (gitignored). Never commit `.env`.
+- **File permissions:** Restrict the file to the OS user running the application:
 
   ```bash
   chmod 600 /path/to/.env
   ```
 
-- **Runtime injection:** [`config/runtime.exs`](config/runtime.exs) reads all secrets from the host environment via `System.get_env/1`. Every required variable is enforced with an explicit startup crash if missing — the application will not start with incomplete credentials. Example pattern:
+- **Production:** [`config/runtime.exs`](config/runtime.exs) reads required values with `System.get_env/1` and **raises at startup** if mandatory variables are missing (database, Cloak, Plaid, B2, Phoenix secret key base, etc.).
+- **Development / test:** [`config/config.exs`](config/config.exs) can load `.env` before other config; [`config/dev.exs`](config/dev.exs) and [`config/test.exs`](config/test.exs) define non-production behavior (e.g. B2 may be omitted in dev/test).
+- **Template:** [`.env.example`](.env.example) lists variables with placeholders. Do not use placeholder values in production.
 
-  ```elixir
-  cloak_key =
-    System.get_env("CLOAK_KEY") ||
-      raise "environment variable CLOAK_KEY is missing."
-  ```
+### Environment variables (summary)
 
-- **Template:** [``.env.example``](.env.example) documents all required variables with placeholder values. The example file contains development-only placeholder credentials that must never be used in production.
+| Variable | Purpose | Required in |
+|----------|---------|-------------|
+| `DATABASE_URL` | PostgreSQL URL | **Production** (`runtime.exs`) |
+| `POOL_SIZE` | DB pool size | **Production** |
+| `SECRET_KEY_BASE` | Phoenix session signing | **Production**; also dev/test via `SECRET_KEY_BASE` / `SECRET_KEY_BASE_TEST` |
+| `PORT` | HTTP listen port | **Production** (default 4000 if unset) |
+| `CLOAK_KEY` | Base64 AES-256-GCM key for Vault / AshCloak | **Dev and prod** (see `dev.exs` / `runtime.exs`); test may use `CLOAK_KEY_TEST` |
+| `PLAID_CLIENT_ID`, `PLAID_SECRET` | Plaid API | **All environments** that call Plaid; **production** enforces via `runtime.exs` |
+| `B2_KEY_ID`, `B2_APP_KEY`, `B2_BUCKET_NAME` | Backblaze B2 | **Production** (`runtime.exs`). **Dev/test:** may be empty (archive disabled; sync still processes in memory) |
+| `POSTGRES_*`, `POSTGRES_POOL_SIZE` | Local or external DB in dev/test | **Dev/test** when not using `DATABASE_URL` |
 
-### Required Environment Variables
+Additional keys (e.g. `CLOAK_KEY_TEST`, `POSTGRES_TEST_DB`) appear in [`.env.example`](.env.example).
 
-| Variable | Purpose | Required In |
-|---|---|---|
-| `DATABASE_URL` | PostgreSQL connection string | Production |
-| `POOL_SIZE` | DB connection pool size | Production |
-| `CLOAK_KEY` | Base64-encoded AES-256-GCM key for token encryption | All |
-| `PLAID_CLIENT_ID` | Plaid API client identifier | All |
-| `PLAID_SECRET` | Plaid API secret | All |
-| `B2_KEY_ID` | Backblaze B2 application key ID | All |
-| `B2_APP_KEY` | Backblaze B2 application key | All |
-| `B2_BUCKET_NAME` | Target B2 bucket name | All |
+Generate a new `CLOAK_KEY` (32 random bytes, base64):
 
-Generating a new `CLOAK_KEY`:
 ```bash
-32 |> :crypto.strong_rand_bytes() |> Base.encode64() |> IO.puts()
+elixir -e '32 |> :crypto.strong_rand_bytes() |> Base.encode64() |> IO.puts()'
 ```
 
-### Agent Rules: Secret Management
+---
 
-- **NEVER** hardcode any secret, key, token, or credential in Elixir source files, config files (`config.exs`, `dev.exs`, `test.exs`), or test fixtures.
-- **NEVER** log the values of `CLOAK_KEY`, `PLAID_SECRET`, `B2_APP_KEY`, or any derived credential. Use `Logger.debug("[Module] action succeeded")` without value interpolation for sensitive fields.
-- **NEVER** add new required secrets to `config/runtime.exs` without adding a corresponding entry to `.env.example` (with a placeholder) and to the table above.
-- When writing tests that require secrets, use the fixed development keys already present in `config/test.exs`. Do not introduce additional hardcoded test keys.
+## 2. Encryption at rest
+
+### `[ACTIVE]` Plaid access token — AES-256-GCM (Cloak / AshCloak)
+
+The Plaid `access_token` grants ongoing read access to linked accounts. It is the most sensitive credential the app stores.
+
+- **Vault:** [`lib/finance_smith/vault.ex`](lib/finance_smith/vault.ex) — `Cloak.Ciphers.AES.GCM` with a 12-byte IV; key from `CLOAK_KEY`.
+- **Storage:** [`lib/finance_smith/banking/plaid_item.ex`](lib/finance_smith/banking/plaid_item.ex) — AshCloak encrypts `access_token` into the `encrypted_access_token` column.
+- **Use:** The token is consumed inside the **Oban-backed sync pipeline** ([`SyncWorker`](lib/finance_smith/data_lake/sync_worker.ex)) when calling Plaid. It must not be loaded for bulk UI listing of items.
+
+### `[ACTIVE]` MFA secrets (TOTP)
+
+When MFA is enabled, **`mfa_secret`** and **`recovery_codes`** on the `User` resource are encrypted with the same Vault ([`lib/finance_smith/identity/user.ex`](lib/finance_smith/identity/user.ex)).
+
+### `[ACTIVE]` Backblaze B2 — server-side encryption
+
+Archived raw JSON is stored in a **private** B2 bucket with **Backblaze default encryption** (bucket-level SSE). Operators enable this when creating the bucket.
+
+### `[ACTIVE]` B2 content integrity
+
+Uploads send an `X-Bz-Content-Sha1` header so B2 can reject corrupted payloads. Implementation: [`lib/finance_smith/data_lake/b2.ex`](lib/finance_smith/data_lake/b2.ex).
 
 ---
 
-## 2. Encryption at Rest
-
-### `[ACTIVE]` Plaid Access Token — AES-256-GCM via Cloak
-
-The Plaid `access_token` grants permanent read access to a user's linked bank accounts. It is the most sensitive credential managed by this system.
-
-- **Implementation:** [`lib/finance_smith/vault.ex`](lib/finance_smith/vault.ex) defines a `Cloak.Vault` using `Cloak.Ciphers.AES.GCM` with a 12-byte IV. The vault key is sourced exclusively from the `CLOAK_KEY` environment variable.
-- **Resource integration:** [`lib/finance_smith/banking/plaid_item.ex`](lib/finance_smith/banking/plaid_item.ex) uses the `AshCloak` extension to transparently encrypt the `access_token` attribute. The value is stored in the database column `encrypted_access_token` and is decrypted in memory only when the field is explicitly loaded.
-- **Decryption scope:** The token is only decrypted within Oban worker processes (`SyncWorker`) at the exact moment a Plaid API call is made. It is never decrypted in bulk queries or passed to non-worker contexts.
-
-### `[ACTIVE]` Backblaze B2 — Server-Side Encryption
-
-Raw Plaid JSON payloads archived to the B2 bucket are encrypted at rest using Backblaze's native Server-Side Encryption (SSE). This is configured at the bucket level and requires no application-side handling.
-
-### `[ACTIVE]` B2 Content Integrity
-
-All B2 uploads include a `X-Bz-Content-Sha1` header containing a SHA-1 hash of the payload body. B2 validates this hash server-side and rejects uploads where the hash does not match, preventing silent data corruption in transit.
-
-Implementation: [`lib/finance_smith/data_lake/b2/b2.ex`](lib/finance_smith/data_lake/b2/b2.ex).
-
-### Agent Rules: Encryption
-
-- **NEVER** remove or bypass the `cloak` block in `PlaidItem`. The `access_token` attribute must always be declared within `cloak do ... end`.
-- **NEVER** access `plaid_item.access_token` in a read action that loads all items in bulk (e.g., `Ash.read!`). Always load the token only within the specific worker that needs it.
-- **NEVER** change the vault cipher away from AES-GCM without a formal key rotation migration plan.
-- **NEVER** mark `access_token` as `sensitive?: false` or expose it in API responses.
-- If adding new sensitive attributes (e.g., a future SimpleFIN token), apply `AshCloak` encryption following the same pattern as `PlaidItem.access_token`.
-
----
-
-## 3. External Services & API Integrations
+## 3. External services & API integrations
 
 ### A. Plaid
 
-#### `[ACTIVE]` Data in Transit
+#### `[ACTIVE]` Data in transit
 
-All requests to the Plaid API are made by the `plaid_elixir` library over TLS. The production endpoint (`https://production.plaid.com/`) enforces TLS 1.2+.
+Requests use the `plaid_elixir` library over **TLS**. Production uses `https://production.plaid.com/` (TLS 1.2+).
 
-#### `[ACTIVE]` Credential Scoping
+#### `[ACTIVE]` Credential scoping
 
-Plaid credentials (`client_id` + `secret`) are loaded from environment variables and are scoped to the single configured Plaid environment (sandbox or production). The application never holds credentials for multiple environments simultaneously at runtime.
+One Plaid environment per runtime configuration (sandbox in default dev config; production URL in `runtime.exs` for release builds).
 
-#### `[PLANNED]` Webhook Signature Verification
+#### `[PLANNED]` Webhook signature verification
 
-Plaid webhook verification was previously implemented but has been removed. The current sync pipeline is triggered on-demand via Oban rather than via Plaid webhooks. There is no HTTP endpoint in the application.
+There is **no Plaid webhook ingestion endpoint** today; sync is **on-demand** via Oban. The app **does** expose **browser** HTTP routes (login, MFA, dashboard).
 
-When webhook ingestion is reimplemented, the following control **must** be implemented before deploying a public endpoint:
+If webhooks are added:
 
-- Validate the `Plaid-Verification` JWT header on every inbound webhook request using Plaid's published public keys.
-- Reject all payloads that fail verification with `401 Unauthorized` before enqueuing any background jobs.
-- Reference: [Plaid Webhook Verification docs](https://plaid.com/docs/api/webhooks/webhook-verification/).
-
----
+- Validate Plaid’s `Plaid-Verification` JWT on every request using Plaid’s published keys.
+- Reject failed verification with `401` before enqueueing work.
+- Reference: [Plaid webhook verification](https://plaid.com/docs/api/webhooks/webhook-verification/).
 
 ### B. Backblaze B2
 
-#### `[ACTIVE]` Scoped Application Keys
+#### `[ACTIVE]` Scoped application keys
 
-The application must not use master B2 account credentials. An Application Key scoped exclusively to the target bucket (`B2_BUCKET_NAME`) with only `readFiles` and `writeFiles` permissions must be created. See [`docs/infrastructure.md`](docs/infrastructure.md) for setup instructions.
+Use an application key limited to the archive bucket with **read** and **write** only—not the master account key. See [`docs/infrastructure.md`](docs/infrastructure.md).
 
-#### `[ACTIVE]` Auth Token Isolation
+#### `[ACTIVE]` Auth token isolation
 
-B2 authorization tokens (obtained by calling `b2_authorize_account`) are held exclusively in the `B2.AuthServer` GenServer process memory. They are never written to disk, the database, or application logs. The token is automatically refreshed on 401 responses.
+Session tokens for the B2 API live in the **`B2.AuthServer`** process ([`lib/finance_smith/data_lake/b2/auth_server.ex`](lib/finance_smith/data_lake/b2/auth_server.ex)), not on disk or in the database; refreshed on `401`.
 
-Implementation: [`lib/finance_smith/data_lake/b2/auth_server.ex`](lib/finance_smith/data_lake/b2/auth_server.ex).
+#### `[PLANNED]` Event notification HMAC
 
-#### `[PLANNED]` Event Notification HMAC Validation
+If B2 event notifications are enabled later, validate `X-Bz-Event-Notification-Signature` before acting on payloads.
 
-If Backblaze B2 event notifications are enabled in the future to trigger processing on object creation, the `X-Bz-Event-Notification-Signature` header must be validated against an HMAC-SHA256 hash computed using the configured shared secret before processing any notification payload.
+### C. AWS (not in current architecture)
 
----
-
-### C. AWS (Not in Current Architecture)
-
-AWS services (API Gateway, SQS, IAM) are not part of the current architecture. The sync pipeline runs entirely within the Elixir application using Oban for background job scheduling. No AWS SDK dependencies are present.
-
-If AWS integration is added in the future:
-
-- `[PLANNED]` Use strictly scoped IAM policies. The API Gateway role should only be permitted `sqs:SendMessage` to the designated queue. The Elixir consumer role should only be permitted `sqs:ReceiveMessage` and `sqs:DeleteMessage` on the specific queue.
-- `[PLANNED]` Never use root AWS credentials or credentials with `*` resource or action wildcards.
+No AWS SDK or services in the default pipeline. Future AWS use should follow least-privilege IAM (`[PLANNED]` in prior revisions; treat as policy guidance if added).
 
 ---
 
-## 4. Application Security
+## 4. Application security
 
-### A. User Authentication
+### A. User authentication
 
-#### `[PLANNED]` Password Hashing
+#### `[ACTIVE]` Password hashing
 
-The `User` resource ([`lib/finance_smith/identity/user.ex`](lib/finance_smith/identity/user.ex)) has a `password_hash` attribute, but no password hashing library is present in `mix.exs` and no hashing or verification logic exists.
+Registration and sign-in use **`bcrypt_elixir`** (`Bcrypt`). Passwords are never stored in plaintext; `password_hash` is marked sensitive on the Ash `User` resource. Dedicated actions: `:register`, `:sign_in` ([`lib/finance_smith/identity/user.ex`](lib/finance_smith/identity/user.ex), [`lib/finance_smith/identity.ex`](lib/finance_smith/identity.ex)).
 
-When authentication is implemented:
+#### `[ACTIVE]` Multi-factor authentication (TOTP)
 
-- Use `bcrypt_elixir` (via `Bcrypt`) or `argon2_elixir` for password hashing. Do not implement custom hashing.
-- The `password_hash` attribute must be marked `sensitive?: true` in the Ash resource and must never be selected in read queries or returned in API responses.
-- Implement a dedicated `:register` create action and a `:sign_in` read action with controlled argument handling rather than using default `create: :*` / `update: :*`.
+Users can enable **TOTP** (compatible authenticator apps) via LiveView flows; MFA verification is required before accessing the main authenticated session. Secrets at rest use Vault as described in [§2](#2-encryption-at-rest).
 
-#### `[PLANNED]` Multi-Factor Authentication (TOTP)
+#### `[ACTIVE]` Account lockout
 
-Access to the Phoenix LiveView dashboard requires standard credential authentication followed by a Time-based One-Time Password (TOTP). Use `NimbleTOTP` for TOTP generation and verification. The TOTP secret must be stored encrypted at rest using the same `FinanceSmith.Vault`.
-
----
+Failed sign-in attempts are tracked; persistent lockout is enforced after repeated failures (see domain and User actions).
 
 ### B. Authorization
 
-#### `[PLANNED]` Ash Authorization Policies
+#### `[ACTIVE]` Policies on `User`
 
-No Ash authorization policies are currently defined. All resources use default actions, and `authorize?: false` is used broadly at call sites.
+`FinanceSmith.Identity.User` uses **`Ash.Policy.Authorizer`** with policies for self-service read and MFA actions, and documented bypasses for unauthenticated registration and sign-in.
 
-When authorization is implemented:
+#### `[PLANNED]` Policies on banking resources
 
-- Add `Ash.Policy.Authorizer` to each resource's `authorizers` list.
-- Define `policy` blocks that scope all reads and writes to the authenticated actor's `household_id`.
-- Remove `authorize?: false` from all production code paths. It is acceptable only in test setup helpers.
-- Do not define bypass policies except for an explicit admin role if one is introduced.
+`PlaidItem`, `Account`, `Transaction`, and `Household` do **not** yet use the same policy model as `User`. Background jobs and some call sites use **`authorize?: false`** for system operations. Tightening banking authorization to the authenticated actor and `household_id` is recommended before any multi-household or shared-host deployment.
 
-#### `[PLANNED]` Ash Multitenancy
+#### `[PLANNED]` Ash multitenancy
 
-`Household` is currently a logical grouping with no enforced data isolation. The Ash multitenancy extension is not configured.
-
-When the web UI is added and multiple households could theoretically share an instance, configure `multitenancy` at the resource level so that all queries are automatically scoped by `household_id` at the database level.
+`Household` is a logical grouping; Ash **multitenancy** is not configured. If multiple households could share one instance, add resource-level multitenancy and automatic `household_id` scoping.
 
 ---
 
-## 5. Infrastructure & Network Security
+## 5. Infrastructure & network security
 
-### `[ACTIVE]` SSH Key-Pair Authentication
+### `[ACTIVE]` SSH key-pair authentication
 
-Remote access to the production host must use SSH key-pair authentication exclusively. Password authentication over SSH must be disabled in `sshd_config`:
+Production host access should use SSH keys; disable password auth in `sshd_config` where applicable:
 
 ```
 PasswordAuthentication no
 ChallengeResponseAuthentication no
 ```
 
-### `[PLANNED]` HTTPS / TLS Termination
+### `[PLANNED]` HTTPS / TLS termination at the edge
 
-The application does not currently expose an HTTP server. When a web layer is added, deploy it behind a reverse proxy (Caddy or Nginx) configured to:
+The Elixir app serves **HTTP** to Bandit by default. For **internet-facing** deployments, terminate TLS at a **reverse proxy** (Caddy, Nginx, etc.):
 
-- Force HTTPS on all public endpoints.
-- Automatically provision and rotate TLS 1.2+ certificates (e.g., via Let's Encrypt / Caddy's automatic HTTPS).
-- Set `HSTS` headers with a minimum `max-age` of 31536000.
-
----
-
-## 6. Dependency & Vulnerability Management
-
-### `[ACTIVE]` Elixir Dependency Auditing
-
-Run `mix audit` regularly to identify Elixir/Erlang dependencies with known CVEs. This check should be added to any CI pipeline.
-
-```bash
-mix audit
-```
-
-Dependencies with known vulnerabilities should be patched within 7 days of disclosure unless a documented exception exists.
-
-### `[ACTIVE]` OS Security Patching
-
-The deployment host should have automated security patching enabled for its Linux distribution. Unattended upgrades (Debian/Ubuntu) or equivalent tooling should be configured.
-
-### Agent Rules: Dependencies
-
-- **NEVER** add dependencies with known CVEs to `mix.exs`.
-- **NEVER** pin dependencies to a version older than one major version behind the current stable release without a documented reason.
-- When adding a new dependency that handles secrets, cryptography, or network I/O, review its changelog and security advisories before adding it.
+- Force HTTPS for public URLs.
+- TLS 1.2+ and automated certificate rotation (e.g. Let’s Encrypt).
+- `Strict-Transport-Security` with `max-age` of at least `31536000` where appropriate.
 
 ---
 
-## 7. Data Retention & Deletion
+## 6. Dependency & vulnerability management
 
-### `[ACTIVE]` Cascade Deletes in PostgreSQL
+### `[ACTIVE]` Elixir dependency auditing
 
-The relational schema enforces cascading deletes. Removing a `PlaidItem` record triggers cascaded deletion of all associated `Account` and `Transaction` records in PostgreSQL. The `User`-to-`PlaidItem` foreign key is configured with `on_delete: :delete`.
+Run `mix audit` regularly (e.g. in CI) to surface known CVEs in dependencies. Patch within a reasonable window unless a documented exception exists.
 
-This is defined in the `postgres do ... references do` blocks within each Ash resource.
+### `[ACTIVE]` OS security patching
 
-### `[PLANNED]` B2 Data Lake Purge
-
-When a `PlaidItem` is deleted, the corresponding archived JSON partitions in the B2 bucket (under `plaid_sync/{household_id}/{plaid_item_id}/`) must also be deleted. This is not yet implemented.
-
-When implementing this control:
-
-- Hook into the `PlaidItem` destroy action using `Ash.Changeset.after_action/2` or an Oban job.
-- List and delete all B2 objects under the item's key prefix using the B2 API.
-- Ensure the deletion is idempotent and handles partial failures gracefully (e.g., log a warning and allow the database delete to proceed rather than rolling back on a B2 error).
-
-### `[ACTIVE]` Oban Job Pruning
-
-Completed and discarded Oban jobs are pruned after 7 days via the `Oban.Plugins.Pruner` plugin. This prevents Oban job records (which may contain B2 object keys) from accumulating indefinitely.
+Enable automated security updates on the deployment host where your distribution supports it.
 
 ---
 
-## 8. Agent Directives (Summary)
+## 7. Data retention & deletion
 
-The following rules apply to all AI coding agents working in this repository. They consolidate the rules embedded in each section above.
+### `[ACTIVE]` Cascade deletes in PostgreSQL
 
-### Secrets & Configuration
+Deleting a `PlaidItem` cascades to related `Account` and `Transaction` rows per foreign keys in the schema. Deleting a user cascades to their Plaid items (see migrations and Ash `references`).
 
-1. Never hardcode secrets, tokens, or credentials in any source file.
-2. Never log or `IO.inspect` the values of sensitive fields: `access_token`, `CLOAK_KEY`, `PLAID_SECRET`, `B2_APP_KEY`, or any decrypted value from `FinanceSmith.Vault`.
-3. Always add new required secrets to both `config/runtime.exs` (with a startup `raise`) and `.env.example` (with a placeholder).
-4. Never commit `.env` to git. Verify `.gitignore` before staging secrets-adjacent files.
+### `[PLANNED]` B2 data lake purge
 
-### Encryption & Sensitive Data
+Deleting a `PlaidItem` does **not** yet automatically delete archived objects under `plaid_sync/...` in B2. Operators may need manual cleanup until an automated purge is implemented.
 
-5. Never remove, bypass, or weaken the `AshCloak` encryption on `PlaidItem.access_token`.
-6. Never load `access_token` in a bulk read query. Only load it inside the Oban worker that requires it for a Plaid API call.
-7. When adding new secrets managed by the application (e.g., SimpleFIN tokens), follow the same AshCloak + Vault pattern used for `access_token`.
+### `[ACTIVE]` Oban job pruning
 
-### Authorization
+Completed and discarded Oban jobs are pruned after seven days (`Oban.Plugins.Pruner`), limiting retention of job arguments that may reference object keys.
 
-8. Do not add `authorize?: false` to production code paths. It is acceptable only in test setup code and explicitly seeded data scripts.
-9. When Ash authorization policies are implemented, never add a blanket `authorize_if always()` policy to a resource without a corresponding constraint (e.g., a role check or actor relationship check).
+---
 
-### Webhooks & HTTP Endpoints
+## Reporting security issues
 
-10. Before adding any public HTTP endpoint that receives data from an external service (Plaid, B2, etc.), implement cryptographic signature verification as described in the `[PLANNED]` sections above. An unverified endpoint that enqueues background jobs must never be deployed.
-
-### Dependency Management
-
-11. Run `mix audit` before committing any change to `mix.exs`.
-12. Never add a dependency for cryptographic primitives or hashing unless it is a well-audited library (e.g., `bcrypt_elixir`, `argon2_elixir`, `cloak`). Do not implement custom crypto.
+If you discover a security vulnerability in this project, contact the maintainer privately (do not open a public issue with exploit details until coordinated disclosure is agreed).
