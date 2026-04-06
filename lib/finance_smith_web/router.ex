@@ -46,6 +46,7 @@ defmodule FinanceSmithWeb.Router do
       live("/dashboard", DashboardLive, :index)
       live("/users/settings", UserSettingsLive, :index)
       live("/users/settings/mfa", MfaSetupLive, :index)
+      live("/oauth/callback/plaid", OAuthCallbackLive, :index)
     end
   end
 end

@@ -20,6 +20,20 @@ defmodule FinanceSmith.Banking.PlaidItem do
 
   actions do
     defaults [:read, :destroy, create: :*, update: :*]
+
+    create :create_from_public_token do
+      description "Exchanges a Plaid public_token for an access_token and creates the PlaidItem."
+
+      accept [:institution_name]
+
+      argument :public_token, :string do
+        allow_nil? false
+        sensitive? true
+      end
+
+      change relate_actor(:user)
+      change FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken
+    end
   end
 
   attributes do

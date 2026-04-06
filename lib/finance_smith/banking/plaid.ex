@@ -25,6 +25,8 @@ defmodule FinanceSmith.Banking.Plaid do
     real-world names like "Chase" in tests.
   """
 
+  @behaviour FinanceSmith.Banking.PlaidBehaviour
+
   alias Plaid.Client
   alias Plaid.Client.Request
 
