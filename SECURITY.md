@@ -56,7 +56,8 @@ Contributors should keep tags aligned with the code. Coding constraints for agen
 | `SECRET_KEY_BASE` | Phoenix session signing | **Production**; also dev/test via `SECRET_KEY_BASE` / `SECRET_KEY_BASE_TEST` |
 | `PORT` | HTTP listen port | **Production** (default 4000 if unset) |
 | `CLOAK_KEY` | Base64 AES-256-GCM key for Vault / AshCloak | **Dev and prod** (see `dev.exs` / `runtime.exs`); test may use `CLOAK_KEY_TEST` |
-| `PLAID_CLIENT_ID`, `PLAID_SECRET` | Plaid API | **All environments** that call Plaid; **production** enforces via `runtime.exs` |
+| `PLAID_CLIENT_ID`, `SANDBOX_PLAID_SECRET` | Plaid API (sandbox) | **Dev/test** via `config.exs` (and optional `:external` / `:integration` tests) |
+| `PLAID_CLIENT_ID`, `PRODUCTION_PLAID_SECRET` | Plaid API (production) | **Production** — enforced via `runtime.exs` |
 | `B2_KEY_ID`, `B2_APP_KEY`, `B2_BUCKET_NAME` | Backblaze B2 | **Production** (`runtime.exs`). **Dev/test:** may be empty (archive disabled; sync still processes in memory) |
 | `POSTGRES_*`, `POSTGRES_POOL_SIZE` | Local or external DB in dev/test | **Dev/test** when not using `DATABASE_URL` |
 

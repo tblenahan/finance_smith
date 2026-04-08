@@ -98,7 +98,7 @@ config :finance_smith, Oban,
 config :plaid,
   root_uri: "https://sandbox.plaid.com/",
   client_id: System.get_env("PLAID_CLIENT_ID"),
-  secret: System.get_env("PLAID_SECRET"),
+  secret: System.get_env("SANDBOX_PLAID_SECRET"),
   # Extend recv_timeout for endpoints that trigger real-time institution
   # requests (e.g. accounts/balance/get can take up to 30s).
   http_options: [recv_timeout: 30_000]

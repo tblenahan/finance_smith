@@ -26,15 +26,14 @@ defmodule FinanceSmith.DataLake.B2 do
   end
 
   @doc """
-  Downloads a file from B2 by its object key and returns the content as a binary.
+  Downloads a file from B2 by its object key and returns the response body.
 
-  The response body is collected fully into memory. Files are downloaded one at a
-  time per Broadway message (bounded by visibility timeout), preventing unbounded
-  memory accumulation across concurrent messages.
+  The body is collected fully into memory. For `Content-Type: application/json`,
+  `Req` may decode the body to a map; otherwise it is returned as `binary()`.
 
-  Returns `{:ok, binary()}` or `{:error, reason}`.
+  Returns `{:ok, binary() | map()}` or `{:error, reason}`.
   """
-  @spec download_file(String.t()) :: {:ok, binary()} | {:error, term()}
+  @spec download_file(String.t()) :: {:ok, binary() | map()} | {:error, term()}
   def download_file(file_name) do
     with {:ok, auth} <- AuthServer.get_auth() do
       do_download(auth, file_name, retry: true)

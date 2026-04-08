@@ -28,7 +28,12 @@ config :finance_smith, FinanceSmith.Repo,
 
 config :ash, policies: [show_policy_breakdowns?: true], disable_async?: true
 
-config :finance_smith, Oban, testing: :inline
+# Manual mode: jobs are persisted but not executed automatically. This avoids
+# SyncWorker firing (real Plaid + B2) when LiveViews enqueue jobs from a process
+# that does not inherit the test process's Oban.Testing.with_testing_mode/2 flag.
+config :finance_smith, Oban, testing: :manual
+
+config :finance_smith, :plaid_client, FinanceSmith.Banking.MockPlaid
 
 config :finance_smith, :b2,
   key_id: System.get_env("B2_KEY_ID", ""),

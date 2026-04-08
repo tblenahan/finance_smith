@@ -11,6 +11,7 @@ defmodule FinanceSmithWeb.Layouts do
         <meta name="csrf-token" content={get_csrf_token()} />
         <title>Finance Smith</title>
         <link phx-track-static rel="stylesheet" href={~p"/assets/app.css" <> static_asset_query()} />
+        <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
         <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js" <> static_asset_query()}></script>
       </head>
       <body class="antialiased font-sans selection:bg-emerald-500/30">
