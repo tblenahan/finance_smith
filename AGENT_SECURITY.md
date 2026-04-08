@@ -22,7 +22,7 @@ When you implement a `[PLANNED]` control from that document, update **both** `SE
 ## Agent rules: secret management
 
 - **NEVER** hardcode any secret, key, token, or credential in Elixir source, `config/*.exs` (except documented test-only patterns), or test fixtures.
-- **NEVER** log the values of `CLOAK_KEY`, `PLAID_SECRET`, `B2_APP_KEY`, or any derived credential. Use `Logger.debug("[Module] action succeeded")` without interpolating sensitive values.
+- **NEVER** log the values of `CLOAK_KEY`, `SANDBOX_PLAID_SECRET`, `PRODUCTION_PLAID_SECRET`, `B2_APP_KEY`, or any derived credential. Use `Logger.debug("[Module] action succeeded")` without interpolating sensitive values.
 - **NEVER** add new required secrets to `config/runtime.exs` without a matching entry in `.env.example` (placeholder) and the environment table in `SECURITY.md`.
 - For tests, use the patterns in `config/test.exs` (e.g. `CLOAK_KEY_TEST` / `SECRET_KEY_BASE_TEST`). Do not introduce extra hardcoded production-like keys.
 
@@ -81,7 +81,7 @@ When Ash policies are extended to banking resources, document the model in `SECU
 ## Agent directives (summary)
 
 1. Never hardcode secrets, tokens, or credentials in any source file.
-2. Never log or `IO.inspect` sensitive values: `access_token`, `CLOAK_KEY`, `PLAID_SECRET`, `B2_APP_KEY`, or any decrypted value from `FinanceSmith.Vault`.
+2. Never log or `IO.inspect` sensitive values: `access_token`, `CLOAK_KEY`, `SANDBOX_PLAID_SECRET`, `PRODUCTION_PLAID_SECRET`, `B2_APP_KEY`, or any decrypted value from `FinanceSmith.Vault`.
 3. Always add new required secrets to `config/runtime.exs` (with startup `raise`) and `.env.example` (placeholder), and extend the table in `SECURITY.md`.
 4. Never commit `.env`. Confirm `.gitignore` before staging secrets-adjacent files.
 5. Never remove, bypass, or weaken AshCloak encryption on `PlaidItem.access_token`.

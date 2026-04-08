@@ -44,8 +44,8 @@ if config_env() == :prod do
       System.get_env("PLAID_CLIENT_ID") ||
         raise("environment variable PLAID_CLIENT_ID is missing."),
     secret:
-      System.get_env("PLAID_SECRET") ||
-        raise("environment variable PLAID_SECRET is missing.")
+      System.get_env("PRODUCTION_PLAID_SECRET") ||
+        raise("environment variable PRODUCTION_PLAID_SECRET is missing.")
 
   config :finance_smith, :b2,
     key_id:
