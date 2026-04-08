@@ -1,13 +1,15 @@
 /**
- * PlaidLink hook — re-initializes Plaid Link on the OAuth callback page.
+ * PlaidLink hook — opens Plaid Link via two code paths:
  *
- * The hook element must carry two data attributes set server-side:
- *   data-link-token          — a fresh Plaid link_token for this user
- *   data-received-redirect-uri — the full current URL including oauth_state_id
+ * 1. **Data-attribute auto-open (OAuth callback):**
+ *    The hook element carries `data-link-token` and `data-received-redirect-uri`.
+ *    On mount, Plaid Link is created and immediately opened so Plaid can complete
+ *    the OAuth handshake.
  *
- * On mount, Plaid Link is created and immediately opened. Plaid detects the
- * receivedRedirectUri, completes the OAuth handshake automatically, and calls
- * either onSuccess or onExit.
+ * 2. **Push-event open (Dashboard / inline):**
+ *    The server pushes an "open_plaid_link" event with `{link_token}`. The hook
+ *    creates Plaid Link on demand and opens it. `receivedRedirectUri` is null
+ *    because inline flows don't carry OAuth state.
  *
  * Events pushed to the LiveView:
  *   "plaid_link_success" — %{public_token, institution_name}
@@ -15,12 +17,21 @@
  */
 const PlaidLink = {
   mounted() {
-    const linkToken = this.el.dataset.linkToken;
-    const receivedRedirectUri = this.el.dataset.receivedRedirectUri;
+    this.handleEvent("open_plaid_link", ({ link_token }) => {
+      this._openLink(link_token, null);
+    });
 
-    if (!linkToken) {
-      console.error("[PlaidLink] Missing data-link-token attribute.");
-      return;
+    const linkToken = this.el.dataset.linkToken;
+    if (linkToken) {
+      const receivedRedirectUri = this.el.dataset.receivedRedirectUri;
+      this._openLink(linkToken, receivedRedirectUri);
+    }
+  },
+
+  _openLink(linkToken, receivedRedirectUri) {
+    if (this.handler) {
+      this.handler.destroy();
+      this.handler = null;
     }
 
     if (typeof window.Plaid === "undefined") {
