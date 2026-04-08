@@ -5,7 +5,7 @@ defmodule FinanceSmith.Banking.PlaidTest do
   These tests require valid sandbox credentials in the environment:
 
       PLAID_CLIENT_ID=your_client_id
-      PLAID_SECRET=your_sandbox_secret
+      SANDBOX_PLAID_SECRET=your_sandbox_secret
 
   Run them explicitly with:
 

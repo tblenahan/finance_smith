@@ -102,7 +102,7 @@ For B2 bucket and key setup, see [infrastructure.md](infrastructure.md).
 ## Configuration and secrets
 
 - **Dev/test:** [`config/config.exs`](../config/config.exs) loads `.env` into `System.get_env` before other config (non-destructive if already set).
-- **Plaid:** sandbox URL in default config; production URL + required `PLAID_CLIENT_ID` / `PLAID_SECRET` in `runtime.exs` for prod.
+- **Plaid:** sandbox URL in default config (`PLAID_CLIENT_ID` / `SANDBOX_PLAID_SECRET`); production URL + required `PLAID_CLIENT_ID` / `PRODUCTION_PLAID_SECRET` in `runtime.exs` for prod.
 - **Reference env:** [`.env.example`](../.env.example) — Postgres, `CLOAK_KEY*`, `SECRET_KEY_BASE*`, Plaid, B2.
 
 ---

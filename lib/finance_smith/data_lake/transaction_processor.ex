@@ -77,8 +77,13 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
   def process_from_b2(object_key) do
     Logger.info("[TransactionProcessor] Downloading from B2. key=#{object_key}")
 
-    json = download_from_b2!(object_key)
-    payload = Jason.decode!(json)
+    body = download_from_b2!(object_key)
+
+    payload =
+      case body do
+        %{} = map -> map
+        bin when is_binary(bin) -> Jason.decode!(bin)
+      end
 
     plaid_item_id = extract_plaid_item_id!(object_key)
     plaid_item = load_plaid_item_by_plaid_id!(plaid_item_id)

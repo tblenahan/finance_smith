@@ -173,8 +173,8 @@ Adminer is published on **8080**. With host networking on `db`, point Adminer at
 ### Plaid
 
 - **Library:** `plaid_elixir` (configured as `:plaid` in Mix).
-- **Dev/sandbox:** [`config/config.exs`](../config/config.exs) — `root_uri` sandbox URL; `client_id` / `secret` from `PLAID_CLIENT_ID` / `PLAID_SECRET`.
-- **Production:** [`config/runtime.exs`](../config/runtime.exs) — `https://production.plaid.com/` and **required** Plaid env vars (raises if missing).
+- **Dev/sandbox:** [`config/config.exs`](../config/config.exs) — `root_uri` sandbox URL; `client_id` / `secret` from `PLAID_CLIENT_ID` / `SANDBOX_PLAID_SECRET`.
+- **Production:** [`config/runtime.exs`](../config/runtime.exs) — `https://production.plaid.com/` and **required** `PLAID_CLIENT_ID` / `PRODUCTION_PLAID_SECRET` (raises if missing).
 
 Wrapper module: [`lib/finance_smith/banking/plaid.ex`](../lib/finance_smith/banking/plaid.ex).
 
@@ -233,7 +233,8 @@ Align with [`.env.example`](../.env.example). Production-only requirements are e
 | `CLOAK_KEY`, `CLOAK_KEY_TEST` | Vault / AshCloak (dev and test respectively where configured) |
 | `SECRET_KEY_BASE`, `SECRET_KEY_BASE_TEST` | Phoenix session signing (dev/test); **`SECRET_KEY_BASE`** required in prod |
 | `PORT` | HTTP port in prod (default 4000) |
-| `PLAID_CLIENT_ID`, `PLAID_SECRET` | Plaid API |
+| `PLAID_CLIENT_ID`, `SANDBOX_PLAID_SECRET` | Plaid API (dev/test sandbox) |
+| `PLAID_CLIENT_ID`, `PRODUCTION_PLAID_SECRET` | Plaid API (production) |
 | `B2_KEY_ID`, `B2_APP_KEY`, `B2_BUCKET_NAME` | B2 API (required in prod `runtime.exs`) |
 | `B2_KEY_NAME` | Optional operator label (not required by app config) |
 
