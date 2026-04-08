@@ -50,11 +50,16 @@ defmodule FinanceSmith.Banking.PlaidItem do
 
     attribute :institution_name, :string
 
-    attribute :next_cursor, :string
+    attribute :next_cursor, :string do
+      # SyncWorker persists cursor via default `:update`; must be writable.
+      public? true
+    end
 
     attribute :status, FinanceSmith.Banking.Types.PlaidItemStatus do
       allow_nil? false
       default :active
+      # SyncWorker sets `:error` on Plaid failures via default `:update`.
+      public? true
     end
 
     create_timestamp :inserted_at

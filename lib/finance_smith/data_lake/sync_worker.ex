@@ -160,7 +160,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
   defp load_plaid_item!(id) do
     Banking.PlaidItem
     |> Ash.Query.filter(id == ^id)
-    |> Ash.Query.load([:accounts, user: :household])
+    |> Ash.Query.load([:access_token, :accounts, user: :household])
     |> Ash.read_one!(authorize?: false)
     |> case do
       nil -> raise "[SyncWorker] PlaidItem not found: #{id}"
