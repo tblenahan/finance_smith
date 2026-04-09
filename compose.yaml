@@ -24,11 +24,10 @@ services:
   adminer:
     image: adminer
     profiles: ['debug']
-    ports:
-      - '8080:8080'
-    # When db uses network_mode: host, use server "host.docker.internal" in Adminer UI.
-    extra_hosts:
-      - 'host.docker.internal:host-gateway'
+    # Same rationale as `db`: bridge + port publish creates veth pairs; some hosts
+    # (WSL2, VMs, restricted kernels) fail with "operation not supported". Host
+    # network binds Adminer on localhost:8080 and reaches Postgres at 127.0.0.1:5432.
+    network_mode: host
     depends_on:
       db:
         condition: service_healthy

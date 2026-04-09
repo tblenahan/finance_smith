@@ -162,7 +162,7 @@ docker compose up -d
 docker compose --profile debug up -d
 ```
 
-Adminer is published on **8080**. With host networking on `db`, point Adminer at **`host.docker.internal`** (see `extra_hosts` on the `adminer` service).
+Adminer uses **`network_mode: host`** (same as `db` and `cloudflared`) so it avoids bridge networking that fails on some hosts. It listens on **http://localhost:8080**. In the login form, set **Server** to **`127.0.0.1`** (or `localhost`), **port** `5432`, and your `POSTGRES_*` credentials.
 
 **External or managed PostgreSQL:** set `POSTGRES_*` variables as in [README.md](../README.md); no code changes required for the app to use another host.
 
