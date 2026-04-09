@@ -86,6 +86,10 @@ defmodule FinanceSmithWeb.OAuthCallbackLiveIntegrationTest do
         FinanceSmith.Banking.Plaid.exchange_public_token(params)
       end)
 
+      stub(FinanceSmith.Banking.MockPlaid, :get_accounts, fn params ->
+        FinanceSmith.Banking.Plaid.get_accounts(params)
+      end)
+
       {:ok, view, html} =
         conn
         |> log_in_user(user)

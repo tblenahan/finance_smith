@@ -4,8 +4,8 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
   the Plaid API, then sets both attributes on the changeset so they are
   persisted (and AshCloak-encrypted) by the normal create flow.
 
-  On success, enqueues a SyncWorker job so the new item's transactions are
-  pulled immediately after creation.
+  On success, calls Plaid `accounts/get`, persists `Account` rows for
+  `TransactionProcessor` to resolve `account_id`, then enqueues SyncWorker.
 
   Security:
   - public_token and access_token are never logged (AGENT_SECURITY Rule 2).
@@ -15,8 +15,10 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
   use Ash.Resource.Change
 
   alias AshCloak
+  alias FinanceSmith.Banking.{Account, PlaidItem}
   alias FinanceSmith.DataLake.SyncWorker
 
+  require Ash.Query
   require Logger
 
   @impl true
@@ -44,19 +46,85 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
       end
     end)
     |> Ash.Changeset.after_action(fn _changeset, plaid_item ->
-      case SyncWorker.enqueue(plaid_item.id) do
-        {:ok, _job} ->
-          Logger.info("[ExchangePublicToken] SyncWorker enqueued for plaid_item=#{plaid_item.id}")
+      item_with_token = load_plaid_item_with_token!(plaid_item.id)
 
+      case plaid_client().get_accounts(%{access_token: item_with_token.access_token}) do
         {:error, reason} ->
-          Logger.warning(
-            "[ExchangePublicToken] SyncWorker enqueue failed for plaid_item=#{plaid_item.id}: #{inspect(reason)}"
-          )
-      end
+          Logger.error("[ExchangePublicToken] Plaid accounts/get failed: #{inspect(reason)}")
 
-      {:ok, plaid_item}
+          {:error,
+           Ash.Error.Changes.InvalidArgument.exception(
+             field: :public_token,
+             message: "Plaid could not load accounts for this item. We have a... discrepancy."
+           )}
+
+        {:ok, %{accounts: []}} ->
+          Logger.error("[ExchangePublicToken] Plaid accounts/get returned no accounts")
+
+          {:error,
+           Ash.Error.Changes.InvalidArgument.exception(
+             field: :public_token,
+             message: "No accounts returned for this item. We have a... discrepancy."
+           )}
+
+        {:ok, %{accounts: accounts}} ->
+          Enum.each(accounts, &create_account_from_plaid!(&1, plaid_item.id))
+
+          Logger.info(
+            "[ExchangePublicToken] Persisted #{length(accounts)} account(s) for plaid_item=#{plaid_item.id}"
+          )
+
+          case SyncWorker.enqueue(plaid_item.id) do
+            {:ok, _job} ->
+              Logger.info(
+                "[ExchangePublicToken] SyncWorker enqueued for plaid_item=#{plaid_item.id}"
+              )
+
+            {:error, reason} ->
+              Logger.warning(
+                "[ExchangePublicToken] SyncWorker enqueue failed for plaid_item=#{plaid_item.id}: #{inspect(reason)}"
+              )
+          end
+
+          {:ok, plaid_item}
+      end
     end)
   end
+
+  defp load_plaid_item_with_token!(id) do
+    PlaidItem
+    |> Ash.Query.filter(id == ^id)
+    |> Ash.Query.load(:access_token)
+    |> Ash.read_one!(authorize?: false)
+  end
+
+  defp create_account_from_plaid!(plaid_account, plaid_item_id) do
+    attrs = %{
+      plaid_account_id: plaid_account.account_id,
+      plaid_item_id: plaid_item_id,
+      name: plaid_account.name,
+      mask: plaid_account.mask,
+      type: normalize_plaid_string(plaid_account.type),
+      subtype: normalize_plaid_string(plaid_account.subtype),
+      current_balance: balance_to_cents(plaid_account.balances)
+    }
+
+    Account
+    |> Ash.Changeset.for_create(:create, attrs, authorize?: false)
+    |> Ash.create!(authorize?: false)
+  end
+
+  defp normalize_plaid_string(nil), do: nil
+  defp normalize_plaid_string(s) when is_atom(s), do: Atom.to_string(s)
+  defp normalize_plaid_string(s) when is_binary(s), do: s
+
+  defp balance_to_cents(nil), do: nil
+
+  defp balance_to_cents(%{current: current}) when is_number(current) do
+    round(current * 100)
+  end
+
+  defp balance_to_cents(_), do: nil
 
   defp plaid_client do
     Application.get_env(:finance_smith, :plaid_client, FinanceSmith.Banking.Plaid)

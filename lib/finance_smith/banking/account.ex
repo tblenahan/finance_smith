@@ -26,14 +26,15 @@ defmodule FinanceSmith.Banking.Account do
 
     attribute :plaid_account_id, :string do
       allow_nil? false
+      public? true
     end
 
-    attribute :name, :string
-    attribute :mask, :string
-    attribute :type, :string
-    attribute :subtype, :string
+    attribute :name, :string, public?: true
+    attribute :mask, :string, public?: true
+    attribute :type, :string, public?: true
+    attribute :subtype, :string, public?: true
 
-    attribute :current_balance, :integer
+    attribute :current_balance, :integer, public?: true
 
     attribute :status, FinanceSmith.Banking.Types.AccountStatus do
       allow_nil? false
@@ -47,6 +48,7 @@ defmodule FinanceSmith.Banking.Account do
   relationships do
     belongs_to :plaid_item, FinanceSmith.Banking.PlaidItem do
       allow_nil? false
+      public? true
     end
 
     belongs_to :duplicate_of, FinanceSmith.Banking.Account
