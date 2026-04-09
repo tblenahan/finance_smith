@@ -42,14 +42,31 @@ if config_env() == :prod do
       }
     ]
 
-  config :plaid,
-    root_uri: "https://production.plaid.com/",
-    client_id:
-      System.get_env("PLAID_CLIENT_ID") ||
-        raise("environment variable PLAID_CLIENT_ID is missing."),
-    secret:
+  plaid_client_id =
+    System.get_env("PLAID_CLIENT_ID") ||
+      raise("environment variable PLAID_CLIENT_ID is missing.")
+
+  if String.downcase(System.get_env("PLAID_ENV", "production")) == "sandbox" do
+    sandbox_secret =
+      System.get_env("SANDBOX_PLAID_SECRET") ||
+        raise(
+          "environment variable SANDBOX_PLAID_SECRET is missing (required when PLAID_ENV=sandbox)."
+        )
+
+    config :plaid,
+      root_uri: "https://sandbox.plaid.com/",
+      client_id: plaid_client_id,
+      secret: sandbox_secret
+  else
+    production_secret =
       System.get_env("PRODUCTION_PLAID_SECRET") ||
         raise("environment variable PRODUCTION_PLAID_SECRET is missing.")
+
+    config :plaid,
+      root_uri: "https://production.plaid.com/",
+      client_id: plaid_client_id,
+      secret: production_secret
+  end
 
   config :finance_smith, :b2,
     key_id:

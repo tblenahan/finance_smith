@@ -10,7 +10,7 @@ This document is for **household operators, deployers, and security reviewers**:
 
 Finance Smith is a strictly scoped, privately hosted financial application. It aggregates personal transaction data from external providers (Plaid) into a self-managed PostgreSQL database, with optional archival of raw payloads to Backblaze B2. It is designed for **single-household** use and is not a multi-tenant SaaS product.
 
-The application **runs an HTTP server** (Phoenix / Bandit) for the web UI: registration, sign-in, optional TOTP multi-factor authentication (MFA), and authenticated LiveView pages. For internet-facing deployments, **TLS termination** is handled by a `cloudflared` daemon (Cloudflare Tunnel); see [§5](#5-infrastructure--network-security).
+The application **runs an HTTP server** (Phoenix / Bandit) for the web UI: registration, sign-in, optional TOTP multi-factor authentication (MFA), and authenticated LiveView pages. **TLS termination** for internet-facing deployments is an **operator responsibility** (reverse proxy); see [§5](#5-infrastructure--network-security).
 
 Foundational principles:
 
@@ -56,8 +56,9 @@ Contributors should keep tags aligned with the code. Coding constraints for agen
 | `SECRET_KEY_BASE` | Phoenix session signing | **Production**; also dev/test via `SECRET_KEY_BASE` / `SECRET_KEY_BASE_TEST` |
 | `PORT` | HTTP listen port | **Production** (default 4000 if unset) |
 | `CLOAK_KEY` | Base64 AES-256-GCM key for Vault / AshCloak | **Dev and prod** (see `dev.exs` / `runtime.exs`); test may use `CLOAK_KEY_TEST` |
-| `PLAID_CLIENT_ID`, `SANDBOX_PLAID_SECRET` | Plaid API (sandbox) | **Dev/test** via `config.exs` (and optional `:external` / `:integration` tests) |
-| `PLAID_CLIENT_ID`, `PRODUCTION_PLAID_SECRET` | Plaid API (production) | **Production** — enforced via `runtime.exs` |
+| `PLAID_CLIENT_ID`, `SANDBOX_PLAID_SECRET` | Plaid API (sandbox) | **Dev/test** via `config.exs`; also **Production** when `PLAID_ENV=sandbox` |
+| `PLAID_CLIENT_ID`, `PRODUCTION_PLAID_SECRET` | Plaid API (production) | **Production** — enforced via `runtime.exs` when `PLAID_ENV` is unset or `production` |
+| `PLAID_ENV` | Plaid environment selector (`sandbox` or `production`) | **Production** (`runtime.exs`). Defaults to `production`. Set to `sandbox` for prod-mode containers targeting Plaid Sandbox (e.g. staging). |
 | `B2_KEY_ID`, `B2_APP_KEY`, `B2_BUCKET_NAME` | Backblaze B2 | **Production** (`runtime.exs`). **Dev/test:** may be empty (archive disabled; sync still processes in memory) |
 | `POSTGRES_*`, `POSTGRES_POOL_SIZE` | Local or external DB in dev/test | **Dev/test** when not using `DATABASE_URL` |
 | `CLOUDFLARE_TUNNEL_TOKEN` | Cloudflare Tunnel daemon auth token | **Production** when using the tunnel; **local Compose** only if you run `docker compose --profile tunnel` (see [`compose.yaml`](compose.yaml)) |
@@ -188,7 +189,7 @@ TLS termination is handled by a `cloudflared` daemon. In Docker Compose it is an
 - TLS 1.2+ and certificate lifecycle are managed entirely by Cloudflare -- no certificates to rotate manually.
 - Phoenix is configured to trust the forwarded protocol header: `force_ssl: [rewrite_on: [:x_forwarded_proto]]` in `config/runtime.exs`.
 - The true client IP is resolved from the `cf-connecting-ip` / `x-forwarded-for` headers by the `RemoteIp` plug in `FinanceSmithWeb.Endpoint`.
-- `Strict-Transport-Security` is enforced via Cloudflare's edge settings (enable HSTS in the Cloudflare SSL/TLS dashboard for the zone).
+- `Strict-Transport-Security` is enforced via Cloudflare’s edge settings (enable HSTS in the Cloudflare SSL/TLS dashboard for the zone).
 - The tunnel token (`CLOUDFLARE_TUNNEL_TOKEN`) must be set in the host environment; see the environment variables table above.
 
 ---
