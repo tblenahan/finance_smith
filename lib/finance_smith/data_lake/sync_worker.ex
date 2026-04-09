@@ -92,6 +92,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
       sync_all_pages(updated_item)
     else
       Logger.info("[SyncWorker] Sync complete. plaid_item=#{plaid_item.id}")
+      complete_sync!(updated_item)
       :ok
     end
   end
@@ -154,6 +155,12 @@ defmodule FinanceSmith.DataLake.SyncWorker do
   defp persist_cursor!(plaid_item, next_cursor) do
     plaid_item
     |> Ash.Changeset.for_update(:update, %{next_cursor: next_cursor}, authorize?: false)
+    |> Ash.update!(authorize?: false)
+  end
+
+  defp complete_sync!(plaid_item) do
+    plaid_item
+    |> Ash.Changeset.for_update(:complete_sync, %{}, authorize?: false)
     |> Ash.update!(authorize?: false)
   end
 
