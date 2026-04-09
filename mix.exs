@@ -56,6 +56,7 @@ defmodule FinanceSmith.MixProject do
       {:petal_components, "~> 2.0"},
       {:heroicons, "~> 0.5"},
       {:bandit, "~> 1.0"},
+      {:remote_ip, "~> 1.2"},
       {:jason, "~> 1.0"},
       {:dns_cluster, "~> 0.1"},
       {:telemetry_metrics, "~> 1.0"},

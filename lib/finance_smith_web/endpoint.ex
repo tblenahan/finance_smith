@@ -7,6 +7,8 @@ defmodule FinanceSmithWeb.Endpoint do
     signing_salt: "finance_smith_session"
   ]
 
+  plug(RemoteIp, headers: ["cf-connecting-ip", "x-forwarded-for"])
+
   plug(Plug.RequestId)
   plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
 

@@ -8,8 +8,12 @@ if config_env() == :prod do
       Generate one with: mix phx.gen.secret
       """
 
+  host = System.get_env("PHX_HOST") || "localhost"
+
   config :finance_smith, FinanceSmithWeb.Endpoint,
     http: [port: String.to_integer(System.get_env("PORT") || "4000")],
+    url: [scheme: "https", host: host, port: 443],
+    force_ssl: [rewrite_on: [:x_forwarded_proto]],
     secret_key_base: secret_key_base
 
   database_url =

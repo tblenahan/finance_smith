@@ -8,8 +8,25 @@ secret_key_base =
       elixir -e ':crypto.strong_rand_bytes(64) |> Base.encode64() |> IO.puts()'
     """
 
+# Public host for generated URLs (Plaid redirect_uri, emails, etc.). When set,
+# Endpoint.url() is https://<host>/… matching a tunnel or reverse proxy; the
+# app still listens on http://0.0.0.0:4000 locally.
+phx_host =
+  case System.get_env("PHX_HOST") do
+    nil -> ""
+    s -> String.trim(s)
+  end
+
+endpoint_url =
+  if phx_host != "" do
+    [scheme: "https", host: phx_host, port: 443, path: "/"]
+  else
+    [scheme: "http", host: "localhost", path: "/", port: 4000]
+  end
+
 config :finance_smith, FinanceSmithWeb.Endpoint,
   http: [ip: {0, 0, 0, 0}, port: 4000],
+  url: endpoint_url,
   debug_errors: true,
   code_reloader: true,
   check_origin: false,

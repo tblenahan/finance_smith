@@ -1,6 +1,10 @@
 defmodule FinanceSmithWeb.DashboardLive do
   use FinanceSmithWeb, :live_view
 
+  alias FinanceSmith.Banking
+
+  require Logger
+
   def mount(_params, _session, socket) do
     {:ok,
      socket
@@ -8,9 +12,73 @@ defmodule FinanceSmithWeb.DashboardLive do
      |> assign(:current_nav, :dashboard)}
   end
 
+  def handle_event("request_link_token", _params, socket) do
+    case create_link_token(socket.assigns.current_user) do
+      {:ok, link_token} ->
+        {:noreply, push_event(socket, "open_plaid_link", %{link_token: link_token})}
+
+      {:error, _reason} ->
+        {:noreply,
+         put_flash(socket, :error, "We have a... discrepancy. Could not reach the data broker.")}
+    end
+  end
+
+  def handle_event(
+        "plaid_link_success",
+        %{"public_token" => public_token, "institution_name" => institution_name},
+        socket
+      ) do
+    user = socket.assigns.current_user
+
+    result =
+      Banking.create_plaid_item_from_public_token(
+        public_token,
+        %{institution_name: institution_name},
+        actor: user
+      )
+
+    case result do
+      {:ok, _plaid_item} ->
+        Logger.info("[DashboardLive] PlaidItem created for user=#{user.id}")
+
+        {:noreply,
+         socket
+         |> put_flash(:info, "Sync complete. Inevitable.")
+         |> push_navigate(to: ~p"/dashboard")}
+
+      {:error, error} ->
+        Logger.error(
+          "[DashboardLive] PlaidItem creation failed for user=#{user.id}: #{inspect(error)}"
+        )
+
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "We have a... discrepancy. The connection could not be established."
+         )}
+    end
+  end
+
+  def handle_event("plaid_link_success", _params, socket) do
+    {:noreply,
+     put_flash(socket, :error, "We have a... discrepancy. Incomplete handshake data received.")}
+  end
+
+  def handle_event("plaid_link_error", %{"error_code" => error_code}, socket) do
+    Logger.warning("[DashboardLive] Plaid Link exited with error_code=#{error_code}")
+    {:noreply, put_flash(socket, :error, "We have a... discrepancy. The link was not completed.")}
+  end
+
+  def handle_event("plaid_link_error", _params, socket) do
+    {:noreply, socket}
+  end
+
   def render(assigns) do
     ~H"""
     <div class="space-y-8">
+      <div id="plaid-link-hook" phx-hook="PlaidLink"></div>
+
       <div class="flex items-end justify-between border-b border-gray-800 pb-4">
         <div>
           <.h1 color_class="text-gray-100" no_margin>The Ledger</.h1>
@@ -18,7 +86,13 @@ defmodule FinanceSmithWeb.DashboardLive do
             Your financial data, consolidated. Inevitable.
           </.p>
         </div>
-        <.button size="sm" color="gray" variant="outline" class="font-mono text-xs border-gray-800 text-emerald-500 hover:border-emerald-500/50">
+        <.button
+          phx-click="request_link_token"
+          size="sm"
+          color="gray"
+          variant="outline"
+          class="font-mono text-xs border-gray-800 text-emerald-500 hover:border-emerald-500/50"
+        >
           + Add Integration
         </.button>
       </div>
@@ -78,5 +152,29 @@ defmodule FinanceSmithWeb.DashboardLive do
       </div>
     </div>
     """
+  end
+
+  # --- Helpers ----------------------------------------------------------------
+
+  defp create_link_token(user) do
+    redirect_uri = FinanceSmithWeb.Endpoint.url() <> "/oauth/callback/plaid"
+
+    params = %{
+      client_name: "Finance Smith",
+      language: "en",
+      country_codes: ["US"],
+      user: %{client_user_id: user.id},
+      products: ["transactions"],
+      redirect_uri: redirect_uri
+    }
+
+    case plaid_client().create_link_token(params) do
+      {:ok, %{link_token: link_token}} -> {:ok, link_token}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp plaid_client do
+    Application.get_env(:finance_smith, :plaid_client, FinanceSmith.Banking.Plaid)
   end
 end

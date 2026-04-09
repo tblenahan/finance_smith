@@ -2,6 +2,7 @@ defmodule FinanceSmithWeb.MfaVerifyLive do
   use FinanceSmithWeb, :live_view
 
   alias FinanceSmith.Identity
+  alias FinanceSmithWeb.AshErrorHTML
 
   def mount(_params, _session, socket) do
     socket =
@@ -110,22 +111,17 @@ defmodule FinanceSmithWeb.MfaVerifyLive do
          |> assign(:token, token)
          |> assign(:trigger_action, true)}
 
-      {:error, error} ->
-        msg = format_lockout_or_invalid(error)
-
+      {:error, %Ash.Error.Invalid{} = error} ->
         {:noreply,
          socket
-         |> assign(:error, msg)
+         |> assign(:error, AshErrorHTML.format_for_user(error))
+         |> assign(:code, "")}
+
+      {:error, _} ->
+        {:noreply,
+         socket
+         |> assign(:error, "Anomaly detected. The code is invalid.")
          |> assign(:code, "")}
     end
   end
-
-  defp format_lockout_or_invalid(%Ash.Error.Invalid{errors: [_ | _] = errors}) do
-    errors
-    |> Enum.map_join(", ", fn err ->
-      Map.get(err, :message) |> to_string()
-    end)
-  end
-
-  defp format_lockout_or_invalid(_), do: "Anomaly detected. The code is invalid."
 end

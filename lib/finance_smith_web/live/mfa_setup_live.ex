@@ -3,6 +3,7 @@ defmodule FinanceSmithWeb.MfaSetupLive do
 
   alias FinanceSmith.Identity
   alias EQRCode
+  alias FinanceSmithWeb.AshErrorHTML
 
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
@@ -141,27 +142,10 @@ defmodule FinanceSmithWeb.MfaSetupLive do
          |> assign(:error, nil)}
 
       {:error, error} ->
-        msg = format_ash_error(error)
-
         {:noreply,
          socket
-         |> assign(:error, msg)
+         |> assign(:error, AshErrorHTML.format_for_user(error))
          |> assign(:code, "")}
     end
   end
-
-  defp format_ash_error(%Ash.Error.Invalid{errors: errors}) when is_list(errors) do
-    errors
-    |> Enum.map(fn err ->
-      case Map.get(err, :message) do
-        nil -> Exception.message(err)
-        msg when is_binary(msg) -> msg
-        other -> inspect(other)
-      end
-    end)
-    |> Enum.join(", ")
-  end
-
-  defp format_ash_error(error) when is_struct(error), do: Exception.message(error)
-  defp format_ash_error(_), do: "Invalid code."
 end

@@ -17,28 +17,33 @@ defmodule FinanceSmith.Identity.User.Changes.VerifyMfaLogin do
     Ash.Changeset.before_action(changeset, fn cs ->
       # authorize?: false is correct here — this load is internal to the action's
       # own transaction. The action-level policy is the authorization boundary.
-      loaded = Ash.load!(cs.data, [:mfa_secret, :recovery_codes], authorize?: false)
-      base32_secret = loaded.mfa_secret
-      recovery_codes_json = loaded.recovery_codes
-
-      cond do
-        is_nil(base32_secret) || base32_secret == "" ->
-          Ash.Changeset.add_error(cs, "MFA is not enabled")
-
-        true ->
-          raw_secret = Base.decode32!(base32_secret, padding: false)
+      case Ash.load(cs.data, [:mfa_secret, :recovery_codes], authorize?: false) do
+        {:ok, loaded} ->
+          base32_secret = loaded.mfa_secret
+          recovery_codes_json = loaded.recovery_codes
 
           cond do
-            NimbleTOTP.valid?(raw_secret, code) ->
-              cs
-
-            recovery_code_valid?(recovery_codes_json, code) ->
-              new_codes = remove_recovery_code(recovery_codes_json, code)
-              AshCloak.encrypt_and_set(cs, :recovery_codes, new_codes)
+            is_nil(base32_secret) || base32_secret == "" ->
+              Ash.Changeset.add_error(cs, "MFA is not enabled")
 
             true ->
-              Ash.Changeset.add_error(cs, "Invalid code")
+              raw_secret = Base.decode32!(base32_secret, padding: false)
+
+              cond do
+                NimbleTOTP.valid?(raw_secret, code) ->
+                  cs
+
+                recovery_code_valid?(recovery_codes_json, code) ->
+                  new_codes = remove_recovery_code(recovery_codes_json, code)
+                  AshCloak.encrypt_and_set(cs, :recovery_codes, new_codes)
+
+                true ->
+                  Ash.Changeset.add_error(cs, "Invalid code")
+              end
           end
+
+        {:error, _} ->
+          Ash.Changeset.add_error(cs, "MFA configuration error. Re-setup your authenticator app.")
       end
     end)
   end

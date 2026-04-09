@@ -78,6 +78,16 @@ docker compose --profile debug up -d
 
 Adminer will be available at [http://localhost:8080](http://localhost:8080).
 
+**6. (Optional) Run Cloudflare Tunnel via Compose**
+
+Set `CLOUDFLARE_TUNNEL_TOKEN` in `.env`, then:
+
+```bash
+docker compose --profile tunnel up -d
+```
+
+Plain `docker compose up` starts only PostgreSQL — the tunnel daemon is opt-in and matches the `debug` profile pattern used for Adminer.
+
 ### Using an External / Managed Database
 
 If you prefer to use a managed PostgreSQL instance instead of Docker, skip step 2 above
