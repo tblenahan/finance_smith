@@ -2,7 +2,6 @@ defmodule FinanceSmithWeb.DashboardLive do
   use FinanceSmithWeb, :live_view
 
   alias FinanceSmith.Banking
-  alias FinanceSmith.DataLake.SyncWorker
 
   require Logger
 
@@ -39,9 +38,8 @@ defmodule FinanceSmithWeb.DashboardLive do
       )
 
     case result do
-      {:ok, plaid_item} ->
+      {:ok, _plaid_item} ->
         Logger.info("[DashboardLive] PlaidItem created for user=#{user.id}")
-        SyncWorker.enqueue(plaid_item.id)
 
         {:noreply,
          socket

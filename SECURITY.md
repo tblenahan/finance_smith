@@ -60,7 +60,7 @@ Contributors should keep tags aligned with the code. Coding constraints for agen
 | `PLAID_CLIENT_ID`, `PRODUCTION_PLAID_SECRET` | Plaid API (production) | **Production** — enforced via `runtime.exs` |
 | `B2_KEY_ID`, `B2_APP_KEY`, `B2_BUCKET_NAME` | Backblaze B2 | **Production** (`runtime.exs`). **Dev/test:** may be empty (archive disabled; sync still processes in memory) |
 | `POSTGRES_*`, `POSTGRES_POOL_SIZE` | Local or external DB in dev/test | **Dev/test** when not using `DATABASE_URL` |
-| `CLOUDFLARE_TUNNEL_TOKEN` | Cloudflare Tunnel daemon auth token | **Production** (Docker Compose `cloudflared` service) |
+| `CLOUDFLARE_TUNNEL_TOKEN` | Cloudflare Tunnel daemon auth token | **Production** when using the tunnel; **local Compose** only if you run `docker compose --profile tunnel` (see [`compose.yaml`](compose.yaml)) |
 
 Additional keys (e.g. `CLOAK_KEY_TEST`, `POSTGRES_TEST_DB`) appear in [`.env.example`](.env.example).
 
@@ -183,7 +183,7 @@ ChallengeResponseAuthentication no
 
 ### `[ACTIVE]` HTTPS / TLS termination via Cloudflare Tunnel
 
-TLS termination is handled by a `cloudflared` daemon running as a Docker Compose service. The daemon maintains an outbound-only connection to Cloudflare's edge network (Zero Trust > Networks > Tunnels), which terminates TLS for all public traffic and forwards plain HTTP to Phoenix at `http://localhost:4000`.
+TLS termination is handled by a `cloudflared` daemon. In Docker Compose it is an **opt-in** service (`profiles: ['tunnel']` in [`compose.yaml`](compose.yaml)); start it with `docker compose --profile tunnel up` when `CLOUDFLARE_TUNNEL_TOKEN` is set. The daemon maintains an outbound-only connection to Cloudflare’s edge network (Zero Trust > Networks > Tunnels), which terminates TLS for all public traffic and forwards plain HTTP to Phoenix at `http://localhost:4000`.
 
 - TLS 1.2+ and certificate lifecycle are managed entirely by Cloudflare -- no certificates to rotate manually.
 - Phoenix is configured to trust the forwarded protocol header: `force_ssl: [rewrite_on: [:x_forwarded_proto]]` in `config/runtime.exs`.

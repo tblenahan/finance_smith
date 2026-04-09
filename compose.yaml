@@ -35,6 +35,10 @@ services:
 
   cloudflared:
     image: cloudflare/cloudflared:latest
+    # Opt-in (like adminer's `debug` profile): not started by plain `docker compose up`.
+    # Enable with: docker compose --profile tunnel up -d
+    # Requires CLOUDFLARE_TUNNEL_TOKEN in the environment or .env.
+    profiles: ['tunnel']
     # Uses host network so the tunnel can reach Phoenix at http://localhost:4000
     # (the same pattern as the db service). Routing rules are managed via the
     # Cloudflare Zero Trust dashboard; no ports are published here.

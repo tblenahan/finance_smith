@@ -60,7 +60,7 @@ Supervision is defined in [`lib/finance_smith/application.ex`](../lib/finance_sm
 | Database | [`priv/repo/`](../priv/repo/) | Migrations, ERD README |
 | Frontend assets | [`assets/`](../assets/) | JS/CSS pipeline (esbuild, Tailwind) |
 | Tests | [`test/`](../test/) | Feature and integration tests |
-| Compose | [`compose.yaml`](../compose.yaml) | PostgreSQL 17 (`db`), Cloudflare Tunnel (`cloudflared`); optional Adminer profile |
+| Compose | [`compose.yaml`](../compose.yaml) | PostgreSQL 17 (`db`); optional Adminer (`debug` profile), Cloudflare Tunnel (`tunnel` profile) |
 
 ---
 
@@ -170,11 +170,19 @@ Adminer is published on **8080**. With host networking on `db`, point Adminer at
 
 ## Public ingress (Cloudflare Tunnel)
 
-The `cloudflared` service in [`compose.yaml`](../compose.yaml) runs the Cloudflare Tunnel daemon. It opens an outbound-only QUIC connection to Cloudflare's edge and forwards public HTTPS traffic to Phoenix at `http://localhost:4000` — no open inbound ports required.
+The `cloudflared` service in [`compose.yaml`](../compose.yaml) runs the Cloudflare Tunnel daemon. It is **not** started by default (it uses Compose **`profiles: ['tunnel']`**, same opt-in pattern as Adminer’s `debug` profile). Enable it when you have a tunnel token:
+
+```bash
+docker compose --profile tunnel up -d
+```
+
+Combine with other profiles as needed, e.g. `docker compose --profile debug --profile tunnel up -d`.
+
+The daemon opens an outbound-only QUIC connection to Cloudflare's edge and forwards public HTTPS traffic to Phoenix at `http://localhost:4000` — no open inbound ports required.
 
 | Concern | Detail |
 |---------|--------|
-| **Compose service** | `cloudflared` — `network_mode: host`; `tunnel run` with `TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}` |
+| **Compose service** | `cloudflared` — `profiles: ['tunnel']`; `network_mode: host`; `tunnel run` with `TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}` |
 | **Routing rules** | Managed via Cloudflare Zero Trust dashboard (Tunnels section); not defined in this repo |
 | **TLS / HSTS** | Terminated at Cloudflare's edge; enable HSTS in the zone's SSL/TLS settings |
 | **Trusted proxy headers** | `RemoteIp` plug in `FinanceSmithWeb.Endpoint` restores the real client IP from `cf-connecting-ip` / `x-forwarded-for` |

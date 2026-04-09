@@ -104,14 +104,17 @@ defmodule FinanceSmithWeb.AshErrorHTML do
   end
 
   # Ensure the message starts with a capital letter and ends with a period.
-  defp cap_sentence(""), do: "We have a... discrepancy."
+  defp cap_sentence(msg) when is_binary(msg) do
+    case String.trim(msg) do
+      "" ->
+        "We have a... discrepancy."
 
-  defp cap_sentence(msg) do
-    msg = String.trim(msg)
-    first = String.first(msg) |> String.upcase()
-    rest = String.slice(msg, 1..-1//1)
-    sentence = first <> rest
-    if String.ends_with?(sentence, "."), do: sentence, else: sentence <> "."
+      trimmed ->
+        first = String.first(trimmed) |> String.upcase()
+        rest = String.slice(trimmed, 1..-1//1)
+        sentence = first <> rest
+        if String.ends_with?(sentence, "."), do: sentence, else: sentence <> "."
+    end
   end
 
   # Replaces %{key} placeholders in `template` with values from `vars`.

@@ -127,5 +127,19 @@ defmodule FinanceSmithWeb.AshErrorHTMLTest do
       result = AshErrorHTML.format_for_user(%Ash.Error.Invalid{errors: [inner]})
       assert String.ends_with?(result, ".")
     end
+
+    test "returns fallback when the message is only whitespace" do
+      inner =
+        Ash.Error.Action.InvalidArgument.exception(
+          field: :email,
+          message: "  \n\t  ",
+          value: "x",
+          vars: []
+        )
+
+      result = AshErrorHTML.format_for_user(%Ash.Error.Invalid{errors: [inner]})
+
+      assert result == "We have a... discrepancy."
+    end
   end
 end
