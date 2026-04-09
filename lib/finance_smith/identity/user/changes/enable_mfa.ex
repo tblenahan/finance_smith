@@ -20,28 +20,30 @@ defmodule FinanceSmith.Identity.User.Changes.EnableMfa do
     Ash.Changeset.before_action(changeset, fn cs ->
       # authorize?: false is correct here — this load is internal to the action's
       # own transaction. The action-level policy is the authorization boundary.
-      case Ash.load(cs.data, :mfa_secret, authorize?: false) do
-        {:ok, loaded} ->
-          base32_secret = loaded.mfa_secret
+      # try/rescue is required because AshCloak raises FunctionClauseError (not an
+      # error tuple) when the vault key doesn't match the encrypted data.
+      try do
+        loaded = Ash.load!(cs.data, :mfa_secret, authorize?: false)
+        base32_secret = loaded.mfa_secret
 
-          if is_nil(base32_secret) || base32_secret == "" do
-            Ash.Changeset.add_error(cs, "No MFA secret found. Generate a secret first.")
+        if is_nil(base32_secret) || base32_secret == "" do
+          Ash.Changeset.add_error(cs, "No MFA secret found. Generate a secret first.")
+        else
+          raw_secret = Base.decode32!(base32_secret, padding: false)
+
+          if NimbleTOTP.valid?(raw_secret, code) do
+            recovery_codes = generate_recovery_codes(@recovery_code_count)
+            json_codes = Jason.encode!(recovery_codes)
+
+            cs
+            |> Ash.Changeset.force_change_attribute(:mfa_enabled, true)
+            |> AshCloak.encrypt_and_set(:recovery_codes, json_codes)
           else
-            raw_secret = Base.decode32!(base32_secret, padding: false)
-
-            if NimbleTOTP.valid?(raw_secret, code) do
-              recovery_codes = generate_recovery_codes(@recovery_code_count)
-              json_codes = Jason.encode!(recovery_codes)
-
-              cs
-              |> Ash.Changeset.force_change_attribute(:mfa_enabled, true)
-              |> AshCloak.encrypt_and_set(:recovery_codes, json_codes)
-            else
-              Ash.Changeset.add_error(cs, "Invalid verification code")
-            end
+            Ash.Changeset.add_error(cs, "Invalid verification code")
           end
-
-        {:error, _} ->
+        end
+      rescue
+        _ ->
           Ash.Changeset.add_error(
             cs,
             "MFA configuration error. Generate a new secret and try again."
