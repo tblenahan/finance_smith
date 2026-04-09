@@ -107,7 +107,12 @@ Requests use the `plaid_elixir` library over **TLS**. Production uses `https://p
 
 #### `[ACTIVE]` Credential scoping
 
-One Plaid environment per runtime configuration (sandbox in default dev config; production URL in `runtime.exs` for release builds).
+One Plaid environment per runtime configuration. Dev/test always uses the Plaid Sandbox. In production, [`config/runtime.exs`](config/runtime.exs) selects the environment via `PLAID_ENV`:
+
+- `PLAID_ENV` unset or `production` (default) → `https://production.plaid.com/` + `PRODUCTION_PLAID_SECRET`.
+- `PLAID_ENV=sandbox` → `https://sandbox.plaid.com/` + `SANDBOX_PLAID_SECRET`. Useful for staging prod-mode containers where live Plaid access is not desired.
+
+The startup `raise` ensures the correct secret is present for whichever environment is selected.
 
 #### `[PLANNED]` Webhook signature verification
 
@@ -182,15 +187,19 @@ PasswordAuthentication no
 ChallengeResponseAuthentication no
 ```
 
-### `[ACTIVE]` HTTPS / TLS termination via Cloudflare Tunnel
+### `[ACTIVE]` HTTPS / TLS termination (operator responsibility)
 
-TLS termination is handled by a `cloudflared` daemon. In Docker Compose it is an **opt-in** service (`profiles: ['tunnel']` in [`compose.yaml`](compose.yaml)); start it with `docker compose --profile tunnel up` when `CLOUDFLARE_TUNNEL_TOKEN` is set. The daemon maintains an outbound-only connection to Cloudflare’s edge network (Zero Trust > Networks > Tunnels), which terminates TLS for all public traffic and forwards plain HTTP to Phoenix at `http://localhost:4000`.
+TLS termination is the **operator's responsibility**. The application does not terminate TLS itself; Phoenix listens on plain HTTP and relies on a reverse proxy to handle HTTPS and set the `x-forwarded-proto` header. Phoenix is configured to trust that header: `force_ssl: [rewrite_on: [:x_forwarded_proto]]` in `config/runtime.exs`. The real client IP is restored from `cf-connecting-ip` / `x-forwarded-for` by the `RemoteIp` plug in `FinanceSmithWeb.Endpoint`.
 
-- TLS 1.2+ and certificate lifecycle are managed entirely by Cloudflare -- no certificates to rotate manually.
-- Phoenix is configured to trust the forwarded protocol header: `force_ssl: [rewrite_on: [:x_forwarded_proto]]` in `config/runtime.exs`.
-- The true client IP is resolved from the `cf-connecting-ip` / `x-forwarded-for` headers by the `RemoteIp` plug in `FinanceSmithWeb.Endpoint`.
-- `Strict-Transport-Security` is enforced via Cloudflare’s edge settings (enable HSTS in the Cloudflare SSL/TLS dashboard for the zone).
+**Cloudflare Tunnel (supported Compose option):** The repo ships a `cloudflared` service in [`compose.yaml`](compose.yaml) as a convenient TLS termination path. It is **opt-in** (`profiles: ['tunnel']`); start it with `docker compose --profile tunnel up` when `CLOUDFLARE_TUNNEL_TOKEN` is set. The daemon opens an outbound-only QUIC connection to Cloudflare's edge (Zero Trust > Networks > Tunnels), which terminates TLS and forwards plain HTTP to Phoenix at `http://localhost:4000`.
+
+When using Cloudflare Tunnel:
+
+- TLS 1.2+ and certificate lifecycle are managed entirely by Cloudflare — no certificates to rotate manually.
+- `Strict-Transport-Security` can be enforced via Cloudflare's edge settings (enable HSTS in the Cloudflare SSL/TLS dashboard for the zone).
 - The tunnel token (`CLOUDFLARE_TUNNEL_TOKEN`) must be set in the host environment; see the environment variables table above.
+
+Any other reverse proxy (nginx, Caddy, Traefik, etc.) that correctly sets `x-forwarded-proto` and trusted `x-forwarded-for` / real-IP headers is equally valid.
 
 ---
 

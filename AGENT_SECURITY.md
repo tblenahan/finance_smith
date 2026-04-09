@@ -31,7 +31,9 @@ When you implement a `[PLANNED]` control from that document, update **both** `SE
 ## Agent rules: encryption and sensitive data
 
 - **NEVER** remove or bypass the `cloak` block on `FinanceSmith.Banking.PlaidItem`. The `access_token` attribute must stay inside `cloak do ... end`.
-- **NEVER** load `plaid_item.access_token` for bulk UI or broad `Ash.read!` lists. Load and use it only in the code path that performs the Plaid API call (today: `FinanceSmith.DataLake.SyncWorker` and its helpers).
+- **NEVER** load `plaid_item.access_token` for bulk UI or broad `Ash.read!` lists. Load and use it only in the two code paths that perform Plaid API calls:
+  1. **Sync pipeline** — `FinanceSmith.DataLake.SyncWorker` and its helpers.
+  2. **Item creation** — `FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken`, which loads the token immediately after the `PlaidItem` is persisted in order to call Plaid `accounts/get` and seed `Account` rows. This single-record load inside an `after_action` hook is intentional and acceptable.
 - **NEVER** change the vault cipher away from AES-GCM without a documented key rotation and migration plan.
 - **NEVER** mark `access_token` as `sensitive?: false` or expose it in HTTP responses or logs.
 - New application-managed secrets (e.g. a future provider token) should use **AshCloak + `FinanceSmith.Vault`**, following the same pattern as `PlaidItem.access_token` or `User` MFA fields.
@@ -70,9 +72,10 @@ When Ash policies are extended to banking resources, document the model in `SECU
 | Cloak vault | [`lib/finance_smith/vault.ex`](lib/finance_smith/vault.ex) |
 | Plaid token encryption | [`lib/finance_smith/banking/plaid_item.ex`](lib/finance_smith/banking/plaid_item.ex) |
 | MFA fields encryption | [`lib/finance_smith/identity/user.ex`](lib/finance_smith/identity/user.ex) |
-| Prod secret enforcement | [`config/runtime.exs`](config/runtime.exs) |
+| Prod secret enforcement + `PLAID_ENV` branching | [`config/runtime.exs`](config/runtime.exs) |
 | Dev/test env + optional B2 | [`config/dev.exs`](config/dev.exs), [`config/test.exs`](config/test.exs) |
 | Transaction sync + token use | [`lib/finance_smith/data_lake/sync_worker.ex`](lib/finance_smith/data_lake/sync_worker.ex) |
+| Item creation + accounts bootstrap (token use) | [`lib/finance_smith/banking/plaid_item/changes/exchange_public_token.ex`](lib/finance_smith/banking/plaid_item/changes/exchange_public_token.ex) |
 | B2 upload (SHA-1 header) | [`lib/finance_smith/data_lake/b2.ex`](lib/finance_smith/data_lake/b2.ex) |
 | B2 auth token process | [`lib/finance_smith/data_lake/b2/auth_server.ex`](lib/finance_smith/data_lake/b2/auth_server.ex) |
 
@@ -85,7 +88,7 @@ When Ash policies are extended to banking resources, document the model in `SECU
 3. Always add new required secrets to `config/runtime.exs` (with startup `raise`) and `.env.example` (placeholder), and extend the table in `SECURITY.md`.
 4. Never commit `.env`. Confirm `.gitignore` before staging secrets-adjacent files.
 5. Never remove, bypass, or weaken AshCloak encryption on `PlaidItem.access_token`.
-6. Never load `access_token` in bulk reads for UI; only in the worker (or equivalent) that calls Plaid.
+6. Never load `access_token` in bulk reads for UI. Acceptable load sites: (a) `SyncWorker` and its helpers for ongoing sync, and (b) `ExchangePublicToken` immediately after item creation to call Plaid `accounts/get`.
 7. When adding new secrets managed by the app, use AshCloak + Vault like existing tokens.
 8. Do not add `authorize?: false` to **new** user-facing production paths without review. Workers and session/bootstrap code may continue to use it where already established.
 9. When adding or changing Ash policies, avoid a blanket `authorize_if always()` on sensitive actions without an explicit constraint (documented bypasses for unauthenticated actions such as `:register` / `:sign_in` are acceptable).

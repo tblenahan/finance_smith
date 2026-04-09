@@ -42,7 +42,7 @@ See [priv/repo/README.md](priv/repo/README.md) for the full entity-relationship 
 cp .env.example .env
 ```
 
-Edit `.env` if you need to change any defaults (e.g. different port or credentials).
+Edit `.env` if you need to change any defaults (e.g. different port or credentials). For production/staging deploys, set `PLAID_ENV=sandbox` to target Plaid Sandbox instead of the live API — see `.env.example` and [SECURITY.md](SECURITY.md) for details.
 
 **2. Start the database**
 
