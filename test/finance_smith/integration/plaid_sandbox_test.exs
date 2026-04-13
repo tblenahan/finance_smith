@@ -16,7 +16,7 @@ defmodule FinanceSmith.Integration.PlaidSandboxTest do
   """
 
   use FinanceSmith.DataCase, async: false
-  use Oban.Testing, repo: FinanceSmith.Repo
+  use Oban.Testing, repo: FinanceSmith.Repo, prefix: "machine"
 
   alias FinanceSmith.Banking
   alias FinanceSmith.Banking.Plaid.Sandbox
@@ -92,7 +92,8 @@ defmodule FinanceSmith.Integration.PlaidSandboxTest do
           from(p in "plaid_items",
             where: p.id == ^uuid_bytes,
             select: p.encrypted_access_token
-          )
+          ),
+          prefix: "core"
         )
 
       assert is_binary(enc) and byte_size(enc) > 0
