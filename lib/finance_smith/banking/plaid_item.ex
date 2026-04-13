@@ -8,6 +8,7 @@ defmodule FinanceSmith.Banking.PlaidItem do
   postgres do
     table "plaid_items"
     repo FinanceSmith.Repo
+    schema "core"
 
     references do
       reference :user, on_delete: :delete, index?: true

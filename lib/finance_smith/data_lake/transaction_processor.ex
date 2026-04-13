@@ -150,6 +150,19 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     end)
   end
 
+  # Keys that are mapped to dedicated core columns — stripped before metadata dump
+  # to avoid duplicating data in the JSONB column.
+  @core_plaid_keys ~w(
+    transaction_id
+    amount
+    date
+    merchant_name
+    website
+    pending
+    account_id
+    personal_finance_category
+  )
+
   defp build_transaction_attrs(txn, account_id) do
     date =
       case txn["date"] do
@@ -157,28 +170,28 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
         date_str -> Date.from_iso8601!(date_str)
       end
 
-    category = extract_category(txn["personal_finance_category"])
+    personal_finance_category =
+      case txn["personal_finance_category"] do
+        %{"detailed" => detailed} when is_binary(detailed) -> detailed
+        _ -> nil
+      end
+
+    metadata =
+      txn
+      |> Map.drop(@core_plaid_keys)
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
     %{
       plaid_transaction_id: txn["transaction_id"],
       amount: dollars_to_cents(txn["amount"]),
       date: date,
       merchant_name: txn["merchant_name"],
-      category: category,
+      website: txn["website"],
+      personal_finance_category: personal_finance_category,
       is_pending: txn["pending"] || false,
-      account_id: account_id
+      account_id: account_id,
+      metadata: metadata
     }
-  end
-
-  defp extract_category(nil), do: nil
-
-  defp extract_category(pfc) when is_map(pfc) do
-    [pfc["primary"], pfc["detailed"]]
-    |> Enum.reject(&is_nil/1)
-    |> case do
-      [] -> nil
-      categories -> categories
-    end
   end
 
   defp dollars_to_cents(nil), do: nil
