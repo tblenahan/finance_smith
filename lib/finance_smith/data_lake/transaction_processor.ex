@@ -59,6 +59,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
         []
         |> collect_upsert_notifications(payload["added"] || [], account_lookup)
         |> collect_upsert_notifications(payload["modified"] || [], account_lookup)
+        |> Enum.reverse()
 
       remove_transactions!(payload["removed"] || [])
       notifications
@@ -127,7 +128,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
               return_notifications?: true
             )
 
-          acc ++ List.wrap(notifs)
+          List.wrap(notifs) ++ acc
 
         :error ->
           Logger.warning(

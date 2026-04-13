@@ -91,15 +91,15 @@ defmodule FinanceSmithWeb.DashboardLive do
     {:noreply, socket}
   end
 
-  def handle_info(%{topic: topic, payload: %Ash.Notifier.Notification{}}, socket) do
-    {:noreply, AshPhoenix.LiveView.handle_live(socket, topic, :transactions)}
-  end
-
   def handle_info(%Phoenix.Socket.Broadcast{event: "complete_sync"}, socket) do
     {:noreply,
      socket
      |> put_flash(:info, "Sync complete. Inevitable.")
      |> AshPhoenix.LiveView.handle_live(:refetch, :transactions)}
+  end
+
+  def handle_info(%{topic: topic, payload: %Ash.Notifier.Notification{}}, socket) do
+    {:noreply, AshPhoenix.LiveView.handle_live(socket, topic, :transactions)}
   end
 
   def render(assigns) do
