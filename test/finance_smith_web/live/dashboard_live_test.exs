@@ -7,6 +7,7 @@ defmodule FinanceSmithWeb.DashboardLiveTest do
 
   alias FinanceSmith.Banking.PlaidItem
   alias FinanceSmith.Identity
+  alias FinanceSmith.Test.PlaidTestHelpers
 
   require Ash.Query
 
@@ -110,6 +111,10 @@ defmodule FinanceSmithWeb.DashboardLiveTest do
                                                                             "public-ok"
                                                                         } ->
         {:ok, %{access_token: access, item_id: item_id, request_id: "r1"}}
+      end)
+
+      expect(FinanceSmith.Banking.MockPlaid, :get_accounts, fn %{access_token: ^access} ->
+        {:ok, PlaidTestHelpers.mock_accounts_response()}
       end)
 
       assert {:error, {:live_redirect, %{to: "/dashboard"}}} =

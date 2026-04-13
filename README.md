@@ -42,7 +42,7 @@ See [priv/repo/README.md](priv/repo/README.md) for the full entity-relationship 
 cp .env.example .env
 ```
 
-Edit `.env` if you need to change any defaults (e.g. different port or credentials).
+Edit `.env` if you need to change any defaults (e.g. different port or credentials). For production/staging deploys, set `PLAID_ENV=sandbox` to target Plaid Sandbox instead of the live API — see `.env.example` and [SECURITY.md](SECURITY.md) for details.
 
 **2. Start the database**
 
@@ -76,7 +76,7 @@ After that, every commit runs `mix format --check-formatted`; if it fails, fix w
 docker compose --profile debug up -d
 ```
 
-Adminer will be available at [http://localhost:8080](http://localhost:8080).
+Adminer will be available at [http://localhost:8080](http://localhost:8080). In the login screen, use server **127.0.0.1**, port **5432**, and the same database user/password as in `.env` (Adminer uses host networking like the Postgres service so it reaches Postgres on localhost).
 
 **6. (Optional) Run Cloudflare Tunnel via Compose**
 

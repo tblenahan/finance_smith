@@ -103,7 +103,9 @@ Routing and pipelines live in [`lib/finance_smith_web/router.ex`](../lib/finance
 | MFA pending | `/users/mfa/*` under `RequireMfaPending` and `LiveAuth :mfa_pending` — [`MfaVerifyLive`](../lib/finance_smith_web/live/mfa_verify_live.ex) |
 | Authenticated + MFA verified | `/dashboard`, `/users/settings`, `/users/settings/mfa` — plugs `RequireAuthenticated`, `RequireMfaVerified`, `LiveAuth :default` — [`DashboardLive`](../lib/finance_smith_web/live/dashboard_live.ex), [`UserSettingsLive`](../lib/finance_smith_web/live/user_settings_live.ex), [`MfaSetupLive`](../lib/finance_smith_web/live/mfa_setup_live.ex) |
 
-There is **no** Plaid or B2 webhook HTTP route in the router today; sync is driven on demand (Oban), not by inbound webhooks.
+There is **no** Plaid or B2 webhook HTTP route in the router today; sync is driven on demand (Oban) or by the user connecting an account via Plaid Link.
+
+**Real-time updates:** `PlaidItem` and `Transaction` resources declare `Ash.Notifier.PubSub` publishers. `DashboardLive` subscribes to `"transaction:created"` (via `AshPhoenix.LiveView.keep_live`) and to `"plaid_item:sync_complete:{user_id}"` to refresh the transaction list and show a sync-complete toast without a page reload. `TransactionProcessor` flushes collected `Ash.Notifier.Notification` structs after the Repo transaction commits to avoid missed-notification warnings.
 
 ---
 
@@ -162,7 +164,7 @@ docker compose up -d
 docker compose --profile debug up -d
 ```
 
-Adminer is published on **8080**. With host networking on `db`, point Adminer at **`host.docker.internal`** (see `extra_hosts` on the `adminer` service).
+Adminer uses **`network_mode: host`** (same as `db` and `cloudflared`) so it avoids bridge networking that fails on some hosts. It listens on **http://localhost:8080**. In the login form, set **Server** to **`127.0.0.1`** (or `localhost`), **port** `5432`, and your `POSTGRES_*` credentials.
 
 **External or managed PostgreSQL:** set `POSTGRES_*` variables as in [README.md](../README.md); no code changes required for the app to use another host.
 
@@ -200,8 +202,10 @@ See [SECURITY.md §5](../SECURITY.md#5-infrastructure--network-security) for the
 ### Plaid
 
 - **Library:** `plaid_elixir` (configured as `:plaid` in Mix).
-- **Dev/sandbox:** [`config/config.exs`](../config/config.exs) — `root_uri` sandbox URL; `client_id` / `secret` from `PLAID_CLIENT_ID` / `SANDBOX_PLAID_SECRET`.
-- **Production:** [`config/runtime.exs`](../config/runtime.exs) — `https://production.plaid.com/` and **required** `PLAID_CLIENT_ID` / `PRODUCTION_PLAID_SECRET` (raises if missing).
+- **Dev/test:** [`config/config.exs`](../config/config.exs) — `root_uri` sandbox URL; `client_id` / `secret` from `PLAID_CLIENT_ID` / `SANDBOX_PLAID_SECRET`.
+- **Production:** [`config/runtime.exs`](../config/runtime.exs) selects environment via `PLAID_ENV`:
+  - **`PLAID_ENV` unset or `production`** (default) → `https://production.plaid.com/`; requires `PLAID_CLIENT_ID` + `PRODUCTION_PLAID_SECRET` (raises at startup if missing).
+  - **`PLAID_ENV=sandbox`** → `https://sandbox.plaid.com/`; requires `PLAID_CLIENT_ID` + `SANDBOX_PLAID_SECRET` (raises at startup if missing). Useful for staging/pre-prod containers that run in production mode but target the Plaid Sandbox.
 
 Wrapper module: [`lib/finance_smith/banking/plaid.ex`](../lib/finance_smith/banking/plaid.ex).
 
@@ -260,8 +264,9 @@ Align with [`.env.example`](../.env.example). Production-only requirements are e
 | `CLOAK_KEY`, `CLOAK_KEY_TEST` | Vault / AshCloak (dev and test respectively where configured) |
 | `SECRET_KEY_BASE`, `SECRET_KEY_BASE_TEST` | Phoenix session signing (dev/test); **`SECRET_KEY_BASE`** required in prod |
 | `PORT` | HTTP port in prod (default 4000) |
-| `PLAID_CLIENT_ID`, `SANDBOX_PLAID_SECRET` | Plaid API (dev/test sandbox) |
-| `PLAID_CLIENT_ID`, `PRODUCTION_PLAID_SECRET` | Plaid API (production) |
+| `PLAID_CLIENT_ID`, `SANDBOX_PLAID_SECRET` | Plaid API (dev/test sandbox; also prod when `PLAID_ENV=sandbox`) |
+| `PLAID_CLIENT_ID`, `PRODUCTION_PLAID_SECRET` | Plaid API (production when `PLAID_ENV` is unset or `production`) |
+| `PLAID_ENV` | Plaid environment selector (`sandbox` or `production`; default `production`). Set to `sandbox` for staging prod-mode containers. |
 | `B2_KEY_ID`, `B2_APP_KEY`, `B2_BUCKET_NAME` | B2 API (required in prod `runtime.exs`) |
 | `B2_KEY_NAME` | Optional operator label (not required by app config) |
 
@@ -272,9 +277,9 @@ Align with [`.env.example`](../.env.example). Production-only requirements are e
 The codebase evolves; the following are **not** fully implemented or not present as of this map—check git for changes before relying on them:
 
 - **SimpleFIN** — mentioned in product docs; no client module or ingestion path in `lib/`.
-- **Plaid Link in the UI** — server-side Plaid helpers may exist; **no** LiveView/controller flow is wired for “connect bank” end-to-end in the dashboard shell.
-- **Plaid webhooks** — no verified webhook endpoint in the router; sync is **on-demand** via Oban.
-- **Rich dashboard product** — filtering/grouping by institution, account type, and time grain as described in the README is **not** fully realized in the current dashboard UI.
-- **B2 purge on `PlaidItem` delete** — database cascades exist; **object-store** cleanup under `plaid_sync/...` is not described as implemented here.
+- **Plaid webhooks** — no verified webhook endpoint in the router; sync is **on-demand** (Oban) or user-initiated via Plaid Link.
+- **Rich dashboard product** — filtering/grouping by institution, account type, and time grain as described in the README is **not** yet realized; the current dashboard shows a recent-transactions table (last 50) without filtering or aggregation.
+- **B2 purge on `PlaidItem` delete** — database cascades exist; **object-store** cleanup under `plaid_sync/...` is not automated.
+- **Banking authorization policies** — `PlaidItem`, `Account`, and `Transaction` do not yet use `Ash.Policy.Authorizer`; background jobs and some internal paths use `authorize?: false`.
 
 If you implement any of the above, update this document and [SECURITY.md](../SECURITY.md) / [AGENT_SECURITY.md](../AGENT_SECURITY.md) when security posture changes.

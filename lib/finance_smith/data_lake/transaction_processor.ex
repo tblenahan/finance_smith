@@ -17,9 +17,13 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   1. Build a lookup map of Plaid account ID -> internal account UUID.
   2. Run all DB operations inside a single Repo transaction:
-     - `added` / `modified` → upsert on `:unique_plaid_transaction_id`
+     - `added` / `modified` → upsert on `:unique_plaid_transaction_id`, collecting
+       `Ash.Notifier.Notification` structs via `return_notifications?: true`
      - `removed` → bulk destroy by `plaid_transaction_id`
-  3. Return `:ok` on success or raise on failure.
+  3. After the transaction commits, flush the collected notifications via
+     `Ash.Notifier.notify/1` so PubSub subscribers (e.g. the Dashboard LiveView)
+     receive `"transaction:created"` broadcasts without missed-notification warnings.
+  4. Return `:ok` on success or raise on failure.
 
   ## Amount convention
 
@@ -51,12 +55,19 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     account_lookup = build_account_lookup(plaid_item)
 
     FinanceSmith.Repo.transaction(fn ->
-      upsert_transactions!(payload["added"] || [], account_lookup)
-      upsert_transactions!(payload["modified"] || [], account_lookup)
+      notifications =
+        []
+        |> collect_upsert_notifications(payload["added"] || [], account_lookup)
+        |> collect_upsert_notifications(payload["modified"] || [], account_lookup)
+        |> Enum.reverse()
+
       remove_transactions!(payload["removed"] || [])
+      notifications
     end)
     |> case do
-      {:ok, _} ->
+      {:ok, notifications} when is_list(notifications) ->
+        Ash.Notifier.notify(notifications)
+
         Logger.info("[TransactionProcessor] Done. plaid_item=#{plaid_item.id}")
         :ok
 
@@ -99,26 +110,32 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   # --- Transaction writes ---------------------------------------------------
 
-  defp upsert_transactions!(transactions, account_lookup) do
-    Enum.each(transactions, fn txn ->
+  defp collect_upsert_notifications(acc, transactions, account_lookup) do
+    Enum.reduce(transactions, acc, fn txn, acc ->
       plaid_account_id = txn["account_id"]
 
       case Map.fetch(account_lookup, plaid_account_id) do
         {:ok, account_id} ->
           attrs = build_transaction_attrs(txn, account_id)
 
-          Transaction
-          |> Ash.Changeset.for_create(:create, attrs, authorize?: false)
-          |> Ash.create!(
-            upsert?: true,
-            upsert_identity: :unique_plaid_transaction_id,
-            authorize?: false
-          )
+          {_record, notifs} =
+            Transaction
+            |> Ash.Changeset.for_create(:create, attrs, authorize?: false)
+            |> Ash.create!(
+              upsert?: true,
+              upsert_identity: :unique_plaid_transaction_id,
+              authorize?: false,
+              return_notifications?: true
+            )
+
+          List.wrap(notifs) ++ acc
 
         :error ->
           Logger.warning(
             "[TransactionProcessor] Unknown plaid_account_id=#{plaid_account_id} — skipping transaction #{txn["transaction_id"]}"
           )
+
+          acc
       end
     end)
   end

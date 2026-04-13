@@ -32,6 +32,7 @@ erDiagram
         text plaid_item_id UK
         binary encrypted_access_token
         text institution_name
+        timestamptz last_synced_at "nullable; set by complete_sync action"
         text next_cursor
         text status "active | error | disconnected"
         timestamp inserted_at

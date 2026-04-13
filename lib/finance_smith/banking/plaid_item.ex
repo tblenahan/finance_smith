@@ -2,7 +2,8 @@ defmodule FinanceSmith.Banking.PlaidItem do
   use Ash.Resource,
     domain: FinanceSmith.Banking,
     data_layer: AshPostgres.DataLayer,
-    extensions: [AshCloak]
+    extensions: [AshCloak],
+    notifiers: [Ash.Notifier.PubSub]
 
   postgres do
     table "plaid_items"
@@ -34,6 +35,18 @@ defmodule FinanceSmith.Banking.PlaidItem do
       change relate_actor(:user)
       change FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken
     end
+
+    update :complete_sync do
+      accept []
+      change set_attribute(:last_synced_at, &DateTime.utc_now/0)
+    end
+  end
+
+  pub_sub do
+    module FinanceSmithWeb.Endpoint
+    prefix "plaid_item"
+
+    publish :complete_sync, ["sync_complete", :user_id]
   end
 
   attributes do
@@ -49,6 +62,10 @@ defmodule FinanceSmith.Banking.PlaidItem do
     end
 
     attribute :institution_name, :string
+
+    attribute :last_synced_at, :utc_datetime_usec do
+      public? true
+    end
 
     attribute :next_cursor, :string do
       # SyncWorker persists cursor via default `:update`; must be writable.

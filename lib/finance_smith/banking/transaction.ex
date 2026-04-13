@@ -1,7 +1,8 @@
 defmodule FinanceSmith.Banking.Transaction do
   use Ash.Resource,
     domain: FinanceSmith.Banking,
-    data_layer: AshPostgres.DataLayer
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [Ash.Notifier.PubSub]
 
   postgres do
     table "transactions"
@@ -22,6 +23,23 @@ defmodule FinanceSmith.Banking.Transaction do
 
   actions do
     defaults [:read, :destroy, create: :*, update: :*]
+
+    read :for_dashboard do
+      filter expr(account.plaid_item.user_id == ^actor(:id))
+
+      prepare build(
+                sort: [date: :desc, inserted_at: :desc],
+                limit: 50,
+                load: [:account]
+              )
+    end
+  end
+
+  pub_sub do
+    module FinanceSmithWeb.Endpoint
+    prefix "transaction"
+
+    publish_all :create, ["created"]
   end
 
   attributes do
@@ -29,21 +47,24 @@ defmodule FinanceSmith.Banking.Transaction do
 
     attribute :plaid_transaction_id, :string do
       allow_nil? false
+      public? true
     end
 
-    attribute :amount, :integer
+    attribute :amount, :integer, public?: true
 
     attribute :date, :date do
       allow_nil? false
+      public? true
     end
 
-    attribute :merchant_name, :string
+    attribute :merchant_name, :string, public?: true
 
-    attribute :category, {:array, :string}
+    attribute :category, {:array, :string}, public?: true
 
     attribute :is_pending, :boolean do
       allow_nil? false
       default false
+      public? true
     end
 
     create_timestamp :inserted_at
@@ -53,6 +74,7 @@ defmodule FinanceSmith.Banking.Transaction do
   relationships do
     belongs_to :account, FinanceSmith.Banking.Account do
       allow_nil? false
+      public? true
     end
   end
 

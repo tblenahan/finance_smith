@@ -49,7 +49,17 @@ defmodule FinanceSmithWeb.UserLoginLive do
               value={@password}
               label="Password"
             />
-            <.alert :if={@error} color="danger" label={@error} />
+            <.alert
+              :if={@error}
+              color="danger"
+              with_icon
+              class="text-xs font-mono"
+              label={@error}
+              close_button_properties={[
+                type: "button",
+                "phx-click": "dismiss_error"
+              ]}
+            />
             <.button type="submit" class="w-full font-mono uppercase tracking-wider text-xs">
               Establish Connection
             </.button>
@@ -82,8 +92,11 @@ defmodule FinanceSmithWeb.UserLoginLive do
     {:noreply,
      socket
      |> assign(:email, params["email"] || "")
-     |> assign(:password, params["password"] || "")
-     |> assign(:error, nil)}
+     |> assign(:password, params["password"] || "")}
+  end
+
+  def handle_event("dismiss_error", _params, socket) do
+    {:noreply, assign(socket, :error, nil)}
   end
 
   def handle_event("submit", %{"user" => %{"email" => email, "password" => password}}, socket) do
@@ -99,6 +112,7 @@ defmodule FinanceSmithWeb.UserLoginLive do
 
         {:noreply,
          socket
+         |> assign(:error, nil)
          |> assign(:token, token)
          |> assign(:trigger_action, true)}
 

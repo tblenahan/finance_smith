@@ -7,6 +7,7 @@ defmodule FinanceSmith.Banking.PlaidItemTest do
   alias FinanceSmith.Banking
   alias FinanceSmith.Banking.PlaidItem
   alias FinanceSmith.Identity
+  alias FinanceSmith.Test.PlaidTestHelpers
 
   setup :verify_on_exit!
 
@@ -37,6 +38,10 @@ defmodule FinanceSmith.Banking.PlaidItemTest do
         {:ok, %{access_token: access, item_id: plaid_item_id, request_id: "req_1"}}
       end)
 
+      expect(FinanceSmith.Banking.MockPlaid, :get_accounts, fn %{access_token: ^access} ->
+        {:ok, PlaidTestHelpers.mock_accounts_response(account_id: "acc_item_test")}
+      end)
+
       assert {:ok, plaid_item} =
                Banking.create_plaid_item_from_public_token(
                  "public-xyz",
@@ -56,6 +61,8 @@ defmodule FinanceSmith.Banking.PlaidItemTest do
         worker: FinanceSmith.DataLake.SyncWorker,
         args: %{"plaid_item_id" => plaid_item.id}
       )
+
+      assert [_] = Ash.load!(plaid_item, :accounts, authorize?: false).accounts
     end
 
     test "returns Ash error when Plaid exchange fails" do
@@ -80,6 +87,10 @@ defmodule FinanceSmith.Banking.PlaidItemTest do
 
       expect(FinanceSmith.Banking.MockPlaid, :exchange_public_token, 2, fn _ ->
         {:ok, %{access_token: access_a, item_id: shared_item_id, request_id: "req_dup"}}
+      end)
+
+      expect(FinanceSmith.Banking.MockPlaid, :get_accounts, fn %{access_token: ^access_a} ->
+        {:ok, PlaidTestHelpers.mock_accounts_response()}
       end)
 
       assert {:ok, _} =
