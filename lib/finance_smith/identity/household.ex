@@ -6,6 +6,7 @@ defmodule FinanceSmith.Identity.Household do
   postgres do
     table "households"
     repo FinanceSmith.Repo
+    schema "core"
   end
 
   actions do
@@ -30,5 +31,35 @@ defmodule FinanceSmith.Identity.Household do
 
   relationships do
     has_many :users, FinanceSmith.Identity.User
+  end
+
+  calculations do
+    calculate :total_net_worth, :integer, expr(total_assets - total_liabilities)
+  end
+
+  aggregates do
+    sum :total_assets, [:users, :plaid_items, :accounts], :current_balance do
+      filter expr(type not in ["credit", "loan"])
+      default 0
+    end
+
+    sum :total_liabilities, [:users, :plaid_items, :accounts], :current_balance do
+      filter expr(type in ["credit", "loan"])
+      default 0
+    end
+
+    sum :outflow_30d, [:users, :plaid_items, :accounts, :transactions], :amount do
+      filter expr(amount > 0 and date >= ago(30, :day))
+      default 0
+    end
+
+    sum :inflow_30d, [:users, :plaid_items, :accounts, :transactions], :amount do
+      filter expr(amount < 0 and date >= ago(30, :day))
+      default 0
+    end
+
+    count :active_streams_count, [:users, :plaid_items] do
+      filter expr(status == :active)
+    end
   end
 end

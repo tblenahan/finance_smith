@@ -21,44 +21,8 @@
       "references": null,
       "scale": null,
       "size": null,
-      "source": "email",
+      "source": "plaid_item_id",
       "type": "text"
-    },
-    {
-      "allow_nil?": false,
-      "default": "nil",
-      "generated?": false,
-      "precision": null,
-      "primary_key?": false,
-      "references": null,
-      "scale": null,
-      "size": null,
-      "source": "password_hash",
-      "type": "text"
-    },
-    {
-      "allow_nil?": false,
-      "default": "false",
-      "generated?": false,
-      "precision": null,
-      "primary_key?": false,
-      "references": null,
-      "scale": null,
-      "size": null,
-      "source": "mfa_enabled",
-      "type": "boolean"
-    },
-    {
-      "allow_nil?": false,
-      "default": "0",
-      "generated?": false,
-      "precision": null,
-      "primary_key?": false,
-      "references": null,
-      "scale": null,
-      "size": null,
-      "source": "failed_auth_attempts",
-      "type": "bigint"
     },
     {
       "allow_nil?": true,
@@ -69,8 +33,44 @@
       "references": null,
       "scale": null,
       "size": null,
-      "source": "locked_until",
+      "source": "institution_name",
+      "type": "text"
+    },
+    {
+      "allow_nil?": true,
+      "default": "nil",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "last_synced_at",
       "type": "utc_datetime_usec"
+    },
+    {
+      "allow_nil?": true,
+      "default": "nil",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "next_cursor",
+      "type": "text"
+    },
+    {
+      "allow_nil?": false,
+      "default": "\"active\"",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "status",
+      "type": "text"
     },
     {
       "allow_nil?": false,
@@ -115,20 +115,20 @@
           "global": null,
           "strategy": null
         },
-        "name": "users_household_id_fkey",
-        "on_delete": "restrict",
+        "name": "plaid_items_user_id_fkey",
+        "on_delete": "delete",
         "on_update": null,
         "primary_key?": true,
-        "schema": "public",
-        "table": "households"
+        "schema": "core",
+        "table": "users"
       },
       "scale": null,
       "size": null,
-      "source": "household_id",
+      "source": "user_id",
       "type": "uuid"
     },
     {
-      "allow_nil?": true,
+      "allow_nil?": false,
       "default": "nil",
       "generated?": false,
       "precision": null,
@@ -136,19 +136,7 @@
       "references": null,
       "scale": null,
       "size": null,
-      "source": "encrypted_mfa_secret",
-      "type": "binary"
-    },
-    {
-      "allow_nil?": true,
-      "default": "nil",
-      "generated?": false,
-      "precision": null,
-      "primary_key?": false,
-      "references": null,
-      "scale": null,
-      "size": null,
-      "source": "encrypted_recovery_codes",
+      "source": "encrypted_access_token",
       "type": "binary"
     }
   ],
@@ -158,19 +146,19 @@
   "custom_indexes": [],
   "custom_statements": [],
   "has_create_action": true,
-  "hash": "5034CCB3A567D0B91A7DC6CD15D6D1674F9BBA4B4DE7FC56AE7FC9796FEC2915",
+  "hash": "97D98FEA4FC3B2F00C664AFCDFBAE63EEFDB5E307F2BB9CFBB8410522B13395A",
   "identities": [
     {
       "all_tenants?": false,
       "base_filter": null,
-      "index_name": "users_unique_email_index",
+      "index_name": "plaid_items_unique_plaid_item_id_index",
       "keys": [
         {
           "type": "atom",
-          "value": "email"
+          "value": "plaid_item_id"
         }
       ],
-      "name": "unique_email",
+      "name": "unique_plaid_item_id",
       "nils_distinct?": true,
       "where": null
     }
@@ -181,6 +169,6 @@
     "strategy": null
   },
   "repo": "Elixir.FinanceSmith.Repo",
-  "schema": null,
-  "table": "users"
+  "schema": "core",
+  "table": "plaid_items"
 }

@@ -7,6 +7,7 @@ defmodule FinanceSmith.Banking.Transaction do
   postgres do
     table "transactions"
     repo FinanceSmith.Repo
+    schema "core"
 
     references do
       reference :account, on_delete: :delete, index?: true
@@ -18,6 +19,10 @@ defmodule FinanceSmith.Banking.Transaction do
       index [:account_id],
         where: "is_pending = true",
         name: "transactions_pending_by_account_index"
+
+      index [:metadata], using: "GIN", name: "transactions_metadata_gin_index"
+
+      index [:date, :amount], name: "transactions_date_amount_index"
     end
   end
 
@@ -59,11 +64,18 @@ defmodule FinanceSmith.Banking.Transaction do
 
     attribute :merchant_name, :string, public?: true
 
-    attribute :category, {:array, :string}, public?: true
+    attribute :personal_finance_category, :string, public?: true
+
+    attribute :website, :string, public?: true
 
     attribute :is_pending, :boolean do
       allow_nil? false
       default false
+      public? true
+    end
+
+    attribute :metadata, :map do
+      default %{}
       public? true
     end
 

@@ -1,6 +1,6 @@
 defmodule FinanceSmith.Banking.PlaidItemTest do
   use FinanceSmith.DataCase, async: false
-  use Oban.Testing, repo: FinanceSmith.Repo
+  use Oban.Testing, repo: FinanceSmith.Repo, prefix: "machine"
 
   import Mox
 

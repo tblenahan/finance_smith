@@ -1,6 +1,6 @@
 defmodule FinanceSmithWeb.DashboardLiveTest do
   use FinanceSmithWeb.ConnCase, async: false
-  use Oban.Testing, repo: FinanceSmith.Repo
+  use Oban.Testing, repo: FinanceSmith.Repo, prefix: "machine"
 
   import Phoenix.LiveViewTest
   import Mox

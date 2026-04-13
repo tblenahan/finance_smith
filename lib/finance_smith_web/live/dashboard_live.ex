@@ -5,6 +5,8 @@ defmodule FinanceSmithWeb.DashboardLive do
 
   require Logger
 
+  @aggregate_fields [:total_net_worth, :outflow_30d, :inflow_30d, :active_streams_count]
+
   def mount(_params, _session, socket) do
     if connected?(socket) do
       FinanceSmithWeb.Endpoint.subscribe(
@@ -12,10 +14,13 @@ defmodule FinanceSmithWeb.DashboardLive do
       )
     end
 
+    user = load_user_aggregates(socket.assigns.current_user)
+
     socket =
       socket
       |> assign(:page_title, "The Ledger")
       |> assign(:current_nav, :dashboard)
+      |> assign(:current_user, user)
       |> AshPhoenix.LiveView.keep_live(
         :transactions,
         fn socket ->
@@ -92,8 +97,11 @@ defmodule FinanceSmithWeb.DashboardLive do
   end
 
   def handle_info(%Phoenix.Socket.Broadcast{event: "complete_sync"}, socket) do
+    user = load_user_aggregates(socket.assigns.current_user)
+
     {:noreply,
      socket
+     |> assign(:current_user, user)
      |> put_flash(:info, "Sync complete. Inevitable.")
      |> AshPhoenix.LiveView.handle_live(:refetch, :transactions)}
   end
@@ -129,31 +137,86 @@ defmodule FinanceSmithWeb.DashboardLive do
         <div class="p-5 border-b md:border-b-0 md:border-r border-gray-800">
           <div class="flex items-center justify-between">
             <p class="text-[10px] font-mono text-gray-500 uppercase tracking-widest">Net Worth</p>
-            <.badge color="gray" variant="outline" size="sm" class="font-mono text-[9px] border-gray-800 text-gray-600">Uncalculated</.badge>
+            <%= if @current_user.active_streams_count > 0 do %>
+              <.badge
+                color="success"
+                variant="outline"
+                size="sm"
+                class="font-mono text-[9px] border-emerald-900/30 text-emerald-500"
+              >
+                Calculated
+              </.badge>
+            <% else %>
+              <.badge
+                color="gray"
+                variant="outline"
+                size="sm"
+                class="font-mono text-[9px] border-gray-800 text-gray-600"
+              >
+                Uncalculated
+              </.badge>
+            <% end %>
           </div>
-          <p class="mt-2 text-3xl font-mono text-gray-100 tracking-tight">$0.00</p>
+          <p class="mt-2 text-3xl font-mono text-gray-100 tracking-tight">
+            <%= format_currency(@current_user.total_net_worth) %>
+          </p>
         </div>
 
         <div class="p-5 border-b md:border-b-0 md:border-r border-gray-800">
           <div class="flex items-center justify-between">
-            <p class="text-[10px] font-mono text-gray-500 uppercase tracking-widest">30-Day Outflow</p>
-            <.badge color="gray" variant="outline" size="sm" class="font-mono text-[9px] border-gray-800 text-gray-600">Uncalculated</.badge>
+            <p class="text-[10px] font-mono text-gray-500 uppercase tracking-widest">
+              30-Day Outflow
+            </p>
+            <.badge
+              color="gray"
+              variant="outline"
+              size="sm"
+              class="font-mono text-[9px] border-gray-800 text-gray-600"
+            >
+              30d
+            </.badge>
           </div>
-          <p class="mt-2 text-3xl font-mono text-gray-100 tracking-tight">$0.00</p>
+          <p class="mt-2 text-3xl font-mono text-gray-100 tracking-tight">
+            <%= format_currency(@current_user.outflow_30d) %>
+          </p>
         </div>
 
         <div class="p-5">
           <div class="flex items-center justify-between">
-            <p class="text-[10px] font-mono text-gray-500 uppercase tracking-widest">Active Data Streams</p>
-            <.badge color="danger" variant="outline" size="sm" class="font-mono text-[9px] border-red-900/30 text-red-500">Severed</.badge>
+            <p class="text-[10px] font-mono text-gray-500 uppercase tracking-widest">
+              Active Data Streams
+            </p>
+            <%= if @current_user.active_streams_count > 0 do %>
+              <.badge
+                color="success"
+                variant="outline"
+                size="sm"
+                class="font-mono text-[9px] border-emerald-900/30 text-emerald-500"
+              >
+                Connected
+              </.badge>
+            <% else %>
+              <.badge
+                color="danger"
+                variant="outline"
+                size="sm"
+                class="font-mono text-[9px] border-red-900/30 text-red-500"
+              >
+                Severed
+              </.badge>
+            <% end %>
           </div>
-          <p class="mt-2 text-3xl font-mono text-gray-100 tracking-tight">0</p>
+          <p class="mt-2 text-3xl font-mono text-gray-100 tracking-tight">
+            <%= @current_user.active_streams_count %>
+          </p>
         </div>
       </div>
 
       <div class="border border-gray-800 rounded-lg bg-gray-950 overflow-hidden">
         <div class="border-b border-gray-800 px-4 py-3 bg-black">
-          <.h3 color_class="text-gray-300" class="text-sm font-mono tracking-wide" no_margin>Recent Entries</.h3>
+          <.h3 color_class="text-gray-300" class="text-sm font-mono tracking-wide" no_margin>
+            Recent Entries
+          </.h3>
         </div>
 
         <div class="w-full overflow-x-auto">
@@ -171,8 +234,12 @@ defmodule FinanceSmithWeb.DashboardLive do
               <%= if @transactions == [] do %>
                 <tr>
                   <td colspan="5" class="px-4 py-16 text-center">
-                    <p class="font-mono text-sm text-gray-500">There is no data here. Only an anomaly.</p>
-                    <p class="mt-2 text-xs font-mono text-gray-600">Initialize a Plaid connection to populate the ledger.</p>
+                    <p class="font-mono text-sm text-gray-500">
+                      There is no data here. Only an anomaly.
+                    </p>
+                    <p class="mt-2 text-xs font-mono text-gray-600">
+                      Initialize a Plaid connection to populate the ledger.
+                    </p>
                   </td>
                 </tr>
               <% else %>
@@ -185,7 +252,7 @@ defmodule FinanceSmithWeb.DashboardLive do
                       <%= transaction.merchant_name || "—" %>
                     </td>
                     <td class="px-4 py-3 font-mono text-[10px] uppercase tracking-wider text-gray-500">
-                      <%= format_category(transaction.category) %>
+                      <%= transaction.personal_finance_category || "—" %>
                     </td>
                     <td class="px-4 py-3 text-xs text-gray-400">
                       <%= transaction.account.name %>
@@ -206,6 +273,28 @@ defmodule FinanceSmithWeb.DashboardLive do
 
   # --- Helpers ----------------------------------------------------------------
 
+  defp load_user_aggregates(user) do
+    Ash.load!(user, @aggregate_fields, actor: user)
+  end
+
+  defp format_currency(nil), do: "$0.00"
+  defp format_currency(0), do: "$0.00"
+
+  defp format_currency(cents) when is_integer(cents) do
+    {sign, abs_cents} = if cents < 0, do: {"-", abs(cents)}, else: {"", cents}
+    dollars = div(abs_cents, 100)
+    remainder = rem(abs_cents, 100)
+
+    formatted_dollars =
+      dollars
+      |> Integer.to_string()
+      |> String.reverse()
+      |> String.replace(~r/.{3}(?=.)/, "\\0,")
+      |> String.reverse()
+
+    "#{sign}$#{formatted_dollars}.#{String.pad_leading(Integer.to_string(remainder), 2, "0")}"
+  end
+
   defp format_amount(nil), do: "—"
 
   defp format_amount(cents) when cents < 0 do
@@ -221,10 +310,6 @@ defmodule FinanceSmithWeb.DashboardLive do
   defp amount_class(nil), do: "text-gray-400"
   defp amount_class(cents) when cents < 0, do: "text-emerald-500"
   defp amount_class(_), do: "text-gray-200"
-
-  defp format_category(nil), do: "—"
-  defp format_category([]), do: "—"
-  defp format_category(categories), do: List.last(categories)
 
   defp create_link_token(user) do
     redirect_uri = FinanceSmithWeb.Endpoint.url() <> "/oauth/callback/plaid"

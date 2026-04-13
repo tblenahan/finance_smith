@@ -6,6 +6,7 @@ defmodule FinanceSmith.Banking.Account do
   postgres do
     table "accounts"
     repo FinanceSmith.Repo
+    schema "core"
 
     references do
       reference :plaid_item, on_delete: :delete, index?: true

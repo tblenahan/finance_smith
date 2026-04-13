@@ -8,6 +8,7 @@ defmodule FinanceSmith.Identity.User do
   postgres do
     table "users"
     repo FinanceSmith.Repo
+    schema "core"
 
     references do
       reference :household, on_delete: :restrict, index?: true
@@ -170,6 +171,36 @@ defmodule FinanceSmith.Identity.User do
     end
 
     has_many :plaid_items, FinanceSmith.Banking.PlaidItem
+  end
+
+  calculations do
+    calculate :total_net_worth, :integer, expr(total_assets - total_liabilities)
+  end
+
+  aggregates do
+    sum :total_assets, [:plaid_items, :accounts], :current_balance do
+      filter expr(type not in ["credit", "loan"])
+      default 0
+    end
+
+    sum :total_liabilities, [:plaid_items, :accounts], :current_balance do
+      filter expr(type in ["credit", "loan"])
+      default 0
+    end
+
+    sum :outflow_30d, [:plaid_items, :accounts, :transactions], :amount do
+      filter expr(amount > 0 and date >= ago(30, :day))
+      default 0
+    end
+
+    sum :inflow_30d, [:plaid_items, :accounts, :transactions], :amount do
+      filter expr(amount < 0 and date >= ago(30, :day))
+      default 0
+    end
+
+    count :active_streams_count, [:plaid_items] do
+      filter expr(status == :active)
+    end
   end
 
   identities do
