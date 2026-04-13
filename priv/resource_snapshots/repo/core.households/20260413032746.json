@@ -55,7 +55,7 @@
   "custom_indexes": [],
   "custom_statements": [],
   "has_create_action": true,
-  "hash": "27F86FF0509D8A9B0F51E24E231C2F67F230E9B4D3EAA1FE042A1F28F7D3BBED",
+  "hash": "FE1E27614F565819D402DDE8E973B3E4CD899DE86F325B1D00950AC3A722F401",
   "identities": [],
   "multitenancy": {
     "attribute": null,
@@ -63,6 +63,6 @@
     "strategy": null
   },
   "repo": "Elixir.FinanceSmith.Repo",
-  "schema": null,
+  "schema": "core",
   "table": "households"
 }

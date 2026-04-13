@@ -90,6 +90,7 @@ config :spark,
 
 config :finance_smith, Oban,
   repo: FinanceSmith.Repo,
+  prefix: "machine",
   plugins: [
     {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7}
   ],

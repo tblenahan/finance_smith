@@ -69,11 +69,20 @@
       "references": null,
       "scale": null,
       "size": null,
-      "source": "category",
-      "type": [
-        "array",
-        "text"
-      ]
+      "source": "personal_finance_category",
+      "type": "text"
+    },
+    {
+      "allow_nil?": true,
+      "default": "nil",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "website",
+      "type": "text"
     },
     {
       "allow_nil?": false,
@@ -86,6 +95,18 @@
       "size": null,
       "source": "is_pending",
       "type": "boolean"
+    },
+    {
+      "allow_nil?": true,
+      "default": "%{}",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "metadata",
+      "type": "map"
     },
     {
       "allow_nil?": false,
@@ -134,7 +155,7 @@
         "on_delete": "delete",
         "on_update": null,
         "primary_key?": true,
-        "schema": "public",
+        "schema": "core",
         "table": "accounts"
       },
       "scale": null,
@@ -195,11 +216,60 @@
       "unique": false,
       "using": null,
       "where": "is_pending = true"
+    },
+    {
+      "all_tenants?": false,
+      "concurrently": false,
+      "error_fields": [
+        "metadata"
+      ],
+      "fields": [
+        {
+          "type": "atom",
+          "value": "metadata"
+        }
+      ],
+      "include": null,
+      "message": null,
+      "name": "transactions_metadata_gin_index",
+      "nulls_distinct": true,
+      "prefix": null,
+      "table": null,
+      "unique": false,
+      "using": "GIN",
+      "where": null
+    },
+    {
+      "all_tenants?": false,
+      "concurrently": false,
+      "error_fields": [
+        "date",
+        "amount"
+      ],
+      "fields": [
+        {
+          "type": "atom",
+          "value": "date"
+        },
+        {
+          "type": "atom",
+          "value": "amount"
+        }
+      ],
+      "include": null,
+      "message": null,
+      "name": "transactions_date_amount_index",
+      "nulls_distinct": true,
+      "prefix": null,
+      "table": null,
+      "unique": false,
+      "using": null,
+      "where": null
     }
   ],
   "custom_statements": [],
   "has_create_action": true,
-  "hash": "88D4033180271E940CE74972DE1495A850FE6D1F6A3C7EF87CBC699D8A09FB7D",
+  "hash": "A215DF501EAFAE283AB29E5179612A0122F404082888F7194673B010A4EEA711",
   "identities": [
     {
       "all_tenants?": false,
@@ -226,6 +296,6 @@
     "strategy": null
   },
   "repo": "Elixir.FinanceSmith.Repo",
-  "schema": null,
+  "schema": "core",
   "table": "transactions"
 }

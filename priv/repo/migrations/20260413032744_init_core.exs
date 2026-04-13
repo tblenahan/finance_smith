@@ -1,4 +1,4 @@
-defmodule FinanceSmith.Repo.Migrations.InitialSchema do
+defmodule FinanceSmith.Repo.Migrations.InitCore do
   @moduledoc """
   Updates resources based on their most recent snapshots.
 
@@ -8,10 +8,15 @@ defmodule FinanceSmith.Repo.Migrations.InitialSchema do
   use Ecto.Migration
 
   def up do
-    create table(:users, primary_key: false) do
+    execute("CREATE SCHEMA IF NOT EXISTS core")
+
+    create table(:users, primary_key: false, prefix: "core") do
       add(:id, :uuid, null: false, default: fragment("uuid_generate_v7()"), primary_key: true)
       add(:email, :text, null: false)
       add(:password_hash, :text, null: false)
+      add(:mfa_enabled, :boolean, null: false, default: false)
+      add(:failed_auth_attempts, :bigint, null: false, default: 0)
+      add(:locked_until, :utc_datetime_usec)
 
       add(:inserted_at, :utc_datetime_usec,
         null: false,
@@ -24,16 +29,22 @@ defmodule FinanceSmith.Repo.Migrations.InitialSchema do
       )
 
       add(:household_id, :uuid, null: false)
+      add(:encrypted_mfa_secret, :binary)
+      add(:encrypted_recovery_codes, :binary)
     end
 
-    create table(:transactions, primary_key: false) do
+    execute("CREATE SCHEMA IF NOT EXISTS core")
+
+    create table(:transactions, primary_key: false, prefix: "core") do
       add(:id, :uuid, null: false, default: fragment("uuid_generate_v7()"), primary_key: true)
       add(:plaid_transaction_id, :text, null: false)
       add(:amount, :bigint)
       add(:date, :date, null: false)
       add(:merchant_name, :text)
-      add(:category, {:array, :text})
+      add(:personal_finance_category, :text)
+      add(:website, :text)
       add(:is_pending, :boolean, null: false, default: false)
+      add(:metadata, :map, default: %{})
 
       add(:inserted_at, :utc_datetime_usec,
         null: false,
@@ -48,17 +59,35 @@ defmodule FinanceSmith.Repo.Migrations.InitialSchema do
       add(:account_id, :uuid, null: false)
     end
 
-    create index(:transactions, [:account_id],
-             name: "transactions_pending_by_account_index",
-             where: "is_pending = true"
+    create index(:transactions, [:date, :amount],
+             name: "transactions_date_amount_index",
+             prefix: "core"
            )
 
-    create index(:transactions, [:account_id, :date], name: "transactions_account_id_date_index")
+    create index(:transactions, [:metadata],
+             name: "transactions_metadata_gin_index",
+             using: "GIN",
+             prefix: "core"
+           )
 
-    create table(:plaid_items, primary_key: false) do
+    create index(:transactions, [:account_id],
+             name: "transactions_pending_by_account_index",
+             where: "is_pending = true",
+             prefix: "core"
+           )
+
+    create index(:transactions, [:account_id, :date],
+             name: "transactions_account_id_date_index",
+             prefix: "core"
+           )
+
+    execute("CREATE SCHEMA IF NOT EXISTS core")
+
+    create table(:plaid_items, primary_key: false, prefix: "core") do
       add(:id, :uuid, null: false, default: fragment("uuid_generate_v7()"), primary_key: true)
       add(:plaid_item_id, :text, null: false)
       add(:institution_name, :text)
+      add(:last_synced_at, :utc_datetime_usec)
       add(:next_cursor, :text)
       add(:status, :text, null: false, default: "active")
 
@@ -78,41 +107,43 @@ defmodule FinanceSmith.Repo.Migrations.InitialSchema do
           column: :id,
           name: "plaid_items_user_id_fkey",
           type: :uuid,
-          prefix: "public",
+          prefix: "core",
           on_delete: :delete_all
         ), null: false)
 
       add(:encrypted_access_token, :binary, null: false)
     end
 
-    create index(:plaid_items, [:user_id])
+    create index(:plaid_items, [:user_id], prefix: "core")
 
     create unique_index(:plaid_items, [:plaid_item_id],
-             name: "plaid_items_unique_plaid_item_id_index"
+             name: "plaid_items_unique_plaid_item_id_index",
+             prefix: "core"
            )
 
-    create table(:households, primary_key: false) do
+    execute("CREATE SCHEMA IF NOT EXISTS core")
+
+    create table(:households, primary_key: false, prefix: "core") do
       add(:id, :uuid, null: false, default: fragment("uuid_generate_v7()"), primary_key: true)
     end
 
-    alter table(:users) do
+    alter table(:users, prefix: "core") do
       modify(
         :household_id,
         references(:households,
           column: :id,
           name: "users_household_id_fkey",
           type: :uuid,
-          prefix: "public",
           on_delete: :restrict
         )
       )
     end
 
-    create index(:users, [:household_id])
+    create index(:users, [:household_id], prefix: "core")
 
-    create unique_index(:users, [:email], name: "users_unique_email_index")
+    create unique_index(:users, [:email], name: "users_unique_email_index", prefix: "core")
 
-    alter table(:households) do
+    alter table(:households, prefix: "core") do
       add(:name, :text, null: false)
 
       add(:inserted_at, :utc_datetime_usec,
@@ -126,30 +157,32 @@ defmodule FinanceSmith.Repo.Migrations.InitialSchema do
       )
     end
 
-    create table(:accounts, primary_key: false) do
+    execute("CREATE SCHEMA IF NOT EXISTS core")
+
+    create table(:accounts, primary_key: false, prefix: "core") do
       add(:id, :uuid, null: false, default: fragment("uuid_generate_v7()"), primary_key: true)
     end
 
-    alter table(:transactions) do
+    alter table(:transactions, prefix: "core") do
       modify(
         :account_id,
         references(:accounts,
           column: :id,
           name: "transactions_account_id_fkey",
           type: :uuid,
-          prefix: "public",
           on_delete: :delete_all
         )
       )
     end
 
-    create index(:transactions, [:account_id])
+    create index(:transactions, [:account_id], prefix: "core")
 
     create unique_index(:transactions, [:plaid_transaction_id, :date],
-             name: "transactions_unique_plaid_transaction_id_index"
+             name: "transactions_unique_plaid_transaction_id_index",
+             prefix: "core"
            )
 
-    alter table(:accounts) do
+    alter table(:accounts, prefix: "core") do
       add(:plaid_account_id, :text, null: false)
       add(:name, :text)
       add(:mask, :text)
@@ -174,7 +207,7 @@ defmodule FinanceSmith.Repo.Migrations.InitialSchema do
           column: :id,
           name: "accounts_plaid_item_id_fkey",
           type: :uuid,
-          prefix: "public",
+          prefix: "core",
           on_delete: :delete_all
         ), null: false)
 
@@ -184,43 +217,51 @@ defmodule FinanceSmith.Repo.Migrations.InitialSchema do
           column: :id,
           name: "accounts_duplicate_of_id_fkey",
           type: :uuid,
-          prefix: "public",
+          prefix: "core",
           on_delete: :nilify_all
         )
       )
     end
 
     create index(:accounts, [:plaid_item_id, :status],
-             name: "accounts_plaid_item_id_status_index"
+             name: "accounts_plaid_item_id_status_index",
+             prefix: "core"
            )
 
-    create index(:accounts, [:plaid_item_id])
+    create index(:accounts, [:plaid_item_id], prefix: "core")
 
-    create index(:accounts, [:duplicate_of_id])
+    create index(:accounts, [:duplicate_of_id], prefix: "core")
 
     create unique_index(:accounts, [:plaid_account_id],
-             name: "accounts_unique_plaid_account_id_index"
+             name: "accounts_unique_plaid_account_id_index",
+             prefix: "core"
            )
   end
 
   def down do
     drop_if_exists(
-      unique_index(:accounts, [:plaid_account_id], name: "accounts_unique_plaid_account_id_index")
+      unique_index(:accounts, [:plaid_account_id],
+        name: "accounts_unique_plaid_account_id_index",
+        prefix: "core"
+      )
     )
 
-    drop_if_exists(index(:accounts, [:duplicate_of_id]))
+    drop_if_exists(index(:accounts, [:duplicate_of_id], prefix: "core"))
 
-    drop_if_exists(index(:accounts, [:plaid_item_id]))
+    drop_if_exists(index(:accounts, [:plaid_item_id], prefix: "core"))
 
-    drop(constraint(:accounts, "accounts_plaid_item_id_fkey"))
+    drop(constraint(:accounts, "accounts_plaid_item_id_fkey", prefix: "core"))
 
-    drop(constraint(:accounts, "accounts_duplicate_of_id_fkey"))
+    drop(constraint(:accounts, "accounts_duplicate_of_id_fkey", prefix: "core"))
 
     drop_if_exists(
-      index(:accounts, [:plaid_item_id, :status], name: "accounts_plaid_item_id_status_index")
+      index(:accounts, [:plaid_item_id, :status],
+        name: "accounts_plaid_item_id_status_index",
+        prefix: "core"
+      )
     )
 
-    alter table(:accounts) do
+    alter table(:accounts, prefix: "core") do
       remove(:duplicate_of_id)
       remove(:plaid_item_id)
       remove(:updated_at)
@@ -236,58 +277,81 @@ defmodule FinanceSmith.Repo.Migrations.InitialSchema do
 
     drop_if_exists(
       unique_index(:transactions, [:plaid_transaction_id, :date],
-        name: "transactions_unique_plaid_transaction_id_index"
+        name: "transactions_unique_plaid_transaction_id_index",
+        prefix: "core"
       )
     )
 
-    drop_if_exists(index(:transactions, [:account_id]))
+    drop_if_exists(index(:transactions, [:account_id], prefix: "core"))
 
-    drop(constraint(:transactions, "transactions_account_id_fkey"))
+    drop(constraint(:transactions, "transactions_account_id_fkey", prefix: "core"))
 
-    alter table(:transactions) do
+    alter table(:transactions, prefix: "core") do
       modify(:account_id, :uuid)
     end
 
-    drop(table(:accounts))
+    drop(table(:accounts, prefix: "core"))
 
-    alter table(:households) do
+    alter table(:households, prefix: "core") do
       remove(:updated_at)
       remove(:inserted_at)
       remove(:name)
     end
 
-    drop_if_exists(unique_index(:users, [:email], name: "users_unique_email_index"))
+    drop_if_exists(
+      unique_index(:users, [:email], name: "users_unique_email_index", prefix: "core")
+    )
 
-    drop_if_exists(index(:users, [:household_id]))
+    drop_if_exists(index(:users, [:household_id], prefix: "core"))
 
-    drop(constraint(:users, "users_household_id_fkey"))
+    drop(constraint(:users, "users_household_id_fkey", prefix: "core"))
 
-    alter table(:users) do
+    alter table(:users, prefix: "core") do
       modify(:household_id, :uuid)
     end
 
-    drop(table(:households))
+    drop(table(:households, prefix: "core"))
 
     drop_if_exists(
-      unique_index(:plaid_items, [:plaid_item_id], name: "plaid_items_unique_plaid_item_id_index")
+      unique_index(:plaid_items, [:plaid_item_id],
+        name: "plaid_items_unique_plaid_item_id_index",
+        prefix: "core"
+      )
     )
 
-    drop_if_exists(index(:plaid_items, [:user_id]))
+    drop_if_exists(index(:plaid_items, [:user_id], prefix: "core"))
 
-    drop(constraint(:plaid_items, "plaid_items_user_id_fkey"))
+    drop(constraint(:plaid_items, "plaid_items_user_id_fkey", prefix: "core"))
 
-    drop(table(:plaid_items))
+    drop(table(:plaid_items, prefix: "core"))
 
     drop_if_exists(
-      index(:transactions, [:account_id, :date], name: "transactions_account_id_date_index")
+      index(:transactions, [:account_id, :date],
+        name: "transactions_account_id_date_index",
+        prefix: "core"
+      )
     )
 
     drop_if_exists(
-      index(:transactions, [:account_id], name: "transactions_pending_by_account_index")
+      index(:transactions, [:account_id],
+        name: "transactions_pending_by_account_index",
+        prefix: "core"
+      )
     )
 
-    drop(table(:transactions))
+    drop_if_exists(
+      index(:transactions, [:metadata], name: "transactions_metadata_gin_index", prefix: "core")
+    )
 
-    drop(table(:users))
+    drop_if_exists(
+      index(:transactions, [:date, :amount],
+        name: "transactions_date_amount_index",
+        prefix: "core"
+      )
+    )
+
+    drop(table(:transactions, prefix: "core"))
+
+    drop(table(:users, prefix: "core"))
   end
 end
