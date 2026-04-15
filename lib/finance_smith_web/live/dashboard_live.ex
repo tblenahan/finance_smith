@@ -344,7 +344,7 @@ defmodule FinanceSmithWeb.DashboardLive do
     """
   end
 
-  # --- Helpers ----------------------------------------------------------------
+  # --- Aggregate / display helpers --------------------------------------------
 
   defp apply_transactions(socket, tx_params) do
     user = socket.assigns.current_user
