@@ -2,6 +2,7 @@ defmodule FinanceSmithWeb.DashboardLive do
   use FinanceSmithWeb, :live_view
 
   alias FinanceSmith.Banking
+  alias FinanceSmithWeb.{TransactionLiveHelpers, TransactionTableComponent}
 
   require Logger
 
@@ -12,6 +13,8 @@ defmodule FinanceSmithWeb.DashboardLive do
       FinanceSmithWeb.Endpoint.subscribe(
         "plaid_item:sync_complete:#{socket.assigns.current_user.id}"
       )
+
+      FinanceSmithWeb.Endpoint.subscribe("transaction:created")
     end
 
     user = load_user_aggregates(socket.assigns.current_user)
@@ -21,15 +24,20 @@ defmodule FinanceSmithWeb.DashboardLive do
       |> assign(:page_title, "The Ledger")
       |> assign(:current_nav, :dashboard)
       |> assign(:current_user, user)
-      |> AshPhoenix.LiveView.keep_live(
-        :transactions,
-        fn socket ->
-          Banking.list_recent_transactions!(actor: socket.assigns.current_user)
-        end,
-        subscribe: "transaction:created"
-      )
+      |> assign(:page, nil)
+      |> assign(:tx_params, TransactionLiveHelpers.default_tx_params())
 
     {:ok, socket}
+  end
+
+  def handle_params(params, _uri, socket) do
+    tx_params = TransactionLiveHelpers.parse_tx_params(params)
+    page = TransactionLiveHelpers.fetch_transactions(socket.assigns.current_user, tx_params)
+
+    {:noreply,
+     socket
+     |> assign(:tx_params, tx_params)
+     |> assign(:page, page)}
   end
 
   def handle_event("request_link_token", _params, socket) do
@@ -98,17 +106,26 @@ defmodule FinanceSmithWeb.DashboardLive do
 
   def handle_info(%Phoenix.Socket.Broadcast{event: "complete_sync"}, socket) do
     user = load_user_aggregates(socket.assigns.current_user)
+    page = TransactionLiveHelpers.fetch_transactions(user, socket.assigns.tx_params)
 
     {:noreply,
      socket
      |> assign(:current_user, user)
-     |> put_flash(:info, "Sync complete. Inevitable.")
-     |> AshPhoenix.LiveView.handle_live(:refetch, :transactions)}
+     |> assign(:page, page)
+     |> put_flash(:info, "Sync complete. Inevitable.")}
   end
 
-  def handle_info(%{topic: topic, payload: %Ash.Notifier.Notification{}}, socket) do
-    {:noreply, AshPhoenix.LiveView.handle_live(socket, topic, :transactions)}
+  def handle_info(%{topic: "transaction:created", payload: %Ash.Notifier.Notification{}}, socket) do
+    page =
+      TransactionLiveHelpers.fetch_transactions(
+        socket.assigns.current_user,
+        socket.assigns.tx_params
+      )
+
+    {:noreply, assign(socket, :page, page)}
   end
+
+  def handle_info(_msg, socket), do: {:noreply, socket}
 
   def render(assigns) do
     ~H"""
@@ -212,66 +229,19 @@ defmodule FinanceSmithWeb.DashboardLive do
         </div>
       </div>
 
-      <div class="border border-gray-800 rounded-lg bg-gray-950 overflow-hidden">
-        <div class="border-b border-gray-800 px-4 py-3 bg-black">
-          <.h3 color_class="text-gray-300" class="text-sm font-mono tracking-wide" no_margin>
-            Recent Entries
-          </.h3>
-        </div>
-
-        <div class="w-full overflow-x-auto">
-          <table class="w-full text-left text-sm whitespace-nowrap">
-            <thead class="bg-gray-900/50 font-mono text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-800">
-              <tr>
-                <th scope="col" class="px-4 py-3">Date</th>
-                <th scope="col" class="px-4 py-3">Merchant</th>
-                <th scope="col" class="px-4 py-3">Category</th>
-                <th scope="col" class="px-4 py-3">Account</th>
-                <th scope="col" class="px-4 py-3 text-right">Amount</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-800/50">
-              <%= if @transactions == [] do %>
-                <tr>
-                  <td colspan="5" class="px-4 py-16 text-center">
-                    <p class="font-mono text-sm text-gray-500">
-                      There is no data here. Only an anomaly.
-                    </p>
-                    <p class="mt-2 text-xs font-mono text-gray-600">
-                      Initialize a Plaid connection to populate the ledger.
-                    </p>
-                  </td>
-                </tr>
-              <% else %>
-                <%= for transaction <- @transactions do %>
-                  <tr class="hover:bg-gray-900/30 transition-colors">
-                    <td class="px-4 py-3 font-mono text-xs text-gray-400">
-                      <%= Calendar.strftime(transaction.date, "%Y-%m-%d") %>
-                    </td>
-                    <td class="px-4 py-3 text-sm text-gray-200">
-                      <%= transaction.merchant_name || "—" %>
-                    </td>
-                    <td class="px-4 py-3 font-mono text-[10px] uppercase tracking-wider text-gray-500">
-                      <%= transaction.personal_finance_category || "—" %>
-                    </td>
-                    <td class="px-4 py-3 text-xs text-gray-400">
-                      <%= transaction.account.name %>
-                    </td>
-                    <td class={"px-4 py-3 font-mono text-sm text-right #{amount_class(transaction.amount)}"}>
-                      <%= format_amount(transaction.amount) %>
-                    </td>
-                  </tr>
-                <% end %>
-              <% end %>
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <.live_component
+        module={TransactionTableComponent}
+        id="txn-table"
+        page={@page}
+        params={@tx_params}
+        base_url={~p"/dashboard"}
+        scope={:global}
+      />
     </div>
     """
   end
 
-  # --- Helpers ----------------------------------------------------------------
+  # --- Aggregate / display helpers --------------------------------------------
 
   defp load_user_aggregates(user) do
     Ash.load!(user, @aggregate_fields, actor: user)
@@ -294,22 +264,6 @@ defmodule FinanceSmithWeb.DashboardLive do
 
     "#{sign}$#{formatted_dollars}.#{String.pad_leading(Integer.to_string(remainder), 2, "0")}"
   end
-
-  defp format_amount(nil), do: "—"
-
-  defp format_amount(cents) when cents < 0 do
-    dollars = abs(cents) / 100
-    "+$#{:erlang.float_to_binary(dollars, [{:decimals, 2}])}"
-  end
-
-  defp format_amount(cents) do
-    dollars = cents / 100
-    "-$#{:erlang.float_to_binary(dollars, [{:decimals, 2}])}"
-  end
-
-  defp amount_class(nil), do: "text-gray-400"
-  defp amount_class(cents) when cents < 0, do: "text-emerald-500"
-  defp amount_class(_), do: "text-gray-200"
 
   defp create_link_token(user) do
     redirect_uri = FinanceSmithWeb.Endpoint.url() <> "/oauth/callback/plaid"

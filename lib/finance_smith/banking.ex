@@ -14,6 +14,8 @@ defmodule FinanceSmith.Banking do
 
     resource FinanceSmith.Banking.Transaction do
       define :list_recent_transactions, action: :for_dashboard
+
+      define :list_transactions, action: :list
     end
   end
 end
