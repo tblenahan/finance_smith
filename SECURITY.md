@@ -166,9 +166,13 @@ Failed sign-in attempts are tracked; persistent lockout is enforced after repeat
 
 `FinanceSmith.Identity.User` uses **`Ash.Policy.Authorizer`** with policies for self-service read and MFA actions, and documented bypasses for unauthenticated registration and sign-in.
 
-#### `[PLANNED]` Policies on banking resources
+#### `[ACTIVE]` Policies on core banking resources (`PlaidItem`, `Account`, `Transaction`)
 
-`PlaidItem`, `Account`, `Transaction`, and `Household` do **not** yet use the same policy model as `User`. Background jobs and some call sites use **`authorize?: false`** for system operations. Tightening banking authorization to the authenticated actor and `household_id` is recommended before any multi-household or shared-host deployment.
+[`FinanceSmith.Banking.PlaidItem`](lib/finance_smith/banking/plaid_item.ex), [`Account`](lib/finance_smith/banking/account.ex), and [`Transaction`](lib/finance_smith/banking/transaction.ex) use **`Ash.Policy.Authorizer`**, consistent with **`User`** (subsection above). Reads are scoped to the authenticated actor (`user_id` on `PlaidItem`, and relationship paths for nested resources). User-initiated writes are denied at the policy layer except **`PlaidItem.create_from_public_token`** (OAuth link completion). Background jobs (e.g. [`SyncWorker`](lib/finance_smith/data_lake/sync_worker.ex), [`TransactionProcessor`](lib/finance_smith/data_lake/transaction_processor.ex)) use **`authorize?: false`** for system-only persistence. The UI uses a summary read that does not select the cloaked **`access_token`**. Implementation details and agent rules: **[AGENT_SECURITY.md](AGENT_SECURITY.md)** (Authorization posture).
+
+#### `[PLANNED]` Policies on `Household`
+
+**`Household`** does **not** yet declare **`Ash.Policy.Authorizer`**. Extending the same policy model to `Household` (and optional `household_id` scoping on banking resources) should accompany any move toward multi-household or shared-host deployment.
 
 #### `[PLANNED]` Ash multitenancy
 
