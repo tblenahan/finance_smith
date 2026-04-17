@@ -1,7 +1,8 @@
 defmodule FinanceSmith.Banking.Account do
   use Ash.Resource,
     domain: FinanceSmith.Banking,
-    data_layer: AshPostgres.DataLayer
+    data_layer: AshPostgres.DataLayer,
+    authorizers: [Ash.Policy.Authorizer]
 
   postgres do
     table "accounts"
@@ -20,6 +21,18 @@ defmodule FinanceSmith.Banking.Account do
 
   actions do
     defaults [:read, :destroy, create: :*, update: :*]
+  end
+
+  policies do
+    policy action_type(:read) do
+      authorize_if expr(plaid_item.user_id == ^actor(:id))
+    end
+
+    # Writes are system-only. SyncWorker performs account writes with
+    # authorize?: false, bypassing policies.
+    policy action_type([:create, :update, :destroy]) do
+      forbid_if always()
+    end
   end
 
   attributes do

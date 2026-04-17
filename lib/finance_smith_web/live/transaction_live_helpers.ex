@@ -12,6 +12,7 @@ defmodule FinanceSmithWeb.TransactionLiveHelpers do
 
   @sort_field_atoms %{"date" => :date, "amount" => :amount, "merchant_name" => :merchant_name}
   @sort_dir_atoms %{"asc" => :asc, "desc" => :desc}
+  @max_category_length 100
 
   @doc """
   Returns the default transaction params map, with a 30-day date_from window.
@@ -41,9 +42,28 @@ defmodule FinanceSmithWeb.TransactionLiveHelpers do
       before_cursor: url_params["before"],
       date_from: parse_date(url_params["date_from"], Date.add(Date.utc_today(), -30)),
       date_to: parse_date(url_params["date_to"], nil),
-      category: nilify(url_params["category"]),
+      category: valid_category(url_params["category"]),
       search: nilify(url_params["search"])
     }
+  end
+
+  @doc """
+  Returns the distinct `personal_finance_category` values visible to `user`,
+  optionally scoped to a specific account or Plaid item.
+
+  Returns an empty list on error rather than raising, matching the graceful
+  degradation pattern used by `fetch_transactions/3`.
+  """
+  @spec list_categories(map(), map()) :: [String.t()]
+  def list_categories(user, scope_filters \\ %{}) do
+    case Banking.list_transaction_categories(scope_filters, actor: user) do
+      {:ok, records} ->
+        Enum.map(records, & &1.personal_finance_category)
+
+      {:error, reason} ->
+        Logger.warning("[TransactionLiveHelpers] list_categories failed", error: inspect(reason))
+        []
+    end
   end
 
   @doc """
@@ -51,15 +71,22 @@ defmodule FinanceSmithWeb.TransactionLiveHelpers do
   An optional `scope_filters` map is merged with the filter args to support
   connection- or account-scoped views.
 
-  Returns an `Ash.Page.Keyset` on success, or `nil` on error.
+  Returns `{:ok, %Ash.Page.Keyset{}}` on success or `{:error, reason}` when the
+  action fails. Callers are expected to surface the error distinctly from the
+  empty state.
   """
+  @spec fetch_transactions(
+          FinanceSmith.Identity.User.t() | map(),
+          map(),
+          map()
+        ) :: {:ok, Ash.Page.Keyset.t()} | {:error, term()}
   def fetch_transactions(user, tx_params, scope_filters \\ %{}) do
     sort_field = Map.fetch!(@sort_field_atoms, tx_params.sort_by)
     sort_dir = Map.fetch!(@sort_dir_atoms, tx_params.sort_dir)
     sort = [{sort_field, sort_dir}, {:inserted_at, :desc}]
 
     page_opts =
-      [limit: 25]
+      [limit: 25, count: true]
       |> maybe_put_cursor(:after, tx_params.after_cursor)
       |> maybe_put_cursor(:before, tx_params.before_cursor)
 
@@ -76,11 +103,11 @@ defmodule FinanceSmithWeb.TransactionLiveHelpers do
 
     case Banking.list_transactions(input, actor: user, query: [sort: sort], page: page_opts) do
       {:ok, page} ->
-        page
+        {:ok, page}
 
-      {:error, reason} ->
-        Logger.error("[TransactionLiveHelpers] list_transactions failed: #{inspect(reason)}")
-        nil
+      {:error, reason} = err ->
+        Logger.error("[TransactionLiveHelpers] list_transactions failed", error: inspect(reason))
+        err
     end
   end
 
@@ -91,6 +118,15 @@ defmodule FinanceSmithWeb.TransactionLiveHelpers do
 
   defp valid_sort_dir(dir) when dir in ["asc", "desc"], do: dir
   defp valid_sort_dir(_), do: "desc"
+
+  # The filter is a parameterized equality on a text column, so any string is
+  # safe — an unknown category just yields zero rows. We only guard against
+  # empty strings and pathologically long inputs.
+  defp valid_category(cat)
+       when is_binary(cat) and byte_size(cat) > 0 and byte_size(cat) <= @max_category_length,
+       do: cat
+
+  defp valid_category(_), do: nil
 
   defp parse_date(nil, default), do: default
   defp parse_date("", default), do: default
