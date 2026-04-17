@@ -2,7 +2,9 @@ defmodule FinanceSmithWeb.DashboardLive do
   use FinanceSmithWeb, :live_view
 
   alias FinanceSmith.Banking
-  alias FinanceSmithWeb.{TransactionLiveHelpers, TransactionTableComponent}
+  alias FinanceSmithWeb.MoneyFormat
+  alias FinanceSmithWeb.TransactionLiveHelpers
+  alias FinanceSmithWeb.TransactionTableComponent
 
   require Logger
 
@@ -26,18 +28,20 @@ defmodule FinanceSmithWeb.DashboardLive do
       |> assign(:current_user, user)
       |> assign(:page, nil)
       |> assign(:tx_params, TransactionLiveHelpers.default_tx_params())
+      |> assign(:categories, TransactionLiveHelpers.list_categories(user))
 
     {:ok, socket}
   end
 
   def handle_params(params, _uri, socket) do
     tx_params = TransactionLiveHelpers.parse_tx_params(params)
-    page = TransactionLiveHelpers.fetch_transactions(socket.assigns.current_user, tx_params)
 
-    {:noreply,
-     socket
-     |> assign(:tx_params, tx_params)
-     |> assign(:page, page)}
+    socket =
+      socket
+      |> assign(:tx_params, tx_params)
+      |> apply_transactions(tx_params)
+
+    {:noreply, socket}
   end
 
   def handle_event("request_link_token", _params, socket) do
@@ -106,23 +110,18 @@ defmodule FinanceSmithWeb.DashboardLive do
 
   def handle_info(%Phoenix.Socket.Broadcast{event: "complete_sync"}, socket) do
     user = load_user_aggregates(socket.assigns.current_user)
-    page = TransactionLiveHelpers.fetch_transactions(user, socket.assigns.tx_params)
 
-    {:noreply,
-     socket
-     |> assign(:current_user, user)
-     |> assign(:page, page)
-     |> put_flash(:info, "Sync complete. Inevitable.")}
+    socket =
+      socket
+      |> assign(:current_user, user)
+      |> apply_transactions(socket.assigns.tx_params)
+      |> put_flash(:info, "Sync complete. Inevitable.")
+
+    {:noreply, socket}
   end
 
   def handle_info(%{topic: "transaction:created", payload: %Ash.Notifier.Notification{}}, socket) do
-    page =
-      TransactionLiveHelpers.fetch_transactions(
-        socket.assigns.current_user,
-        socket.assigns.tx_params
-      )
-
-    {:noreply, assign(socket, :page, page)}
+    {:noreply, apply_transactions(socket, socket.assigns.tx_params)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -175,7 +174,7 @@ defmodule FinanceSmithWeb.DashboardLive do
             <% end %>
           </div>
           <p class="mt-2 text-3xl font-mono text-gray-100 tracking-tight">
-            <%= format_currency(@current_user.total_net_worth) %>
+            {MoneyFormat.format(@current_user.total_net_worth, nil_display: "$0.00")}
           </p>
         </div>
 
@@ -194,7 +193,7 @@ defmodule FinanceSmithWeb.DashboardLive do
             </.badge>
           </div>
           <p class="mt-2 text-3xl font-mono text-gray-100 tracking-tight">
-            <%= format_currency(@current_user.outflow_30d) %>
+            {MoneyFormat.format(@current_user.outflow_30d, nil_display: "$0.00")}
           </p>
         </div>
 
@@ -224,7 +223,7 @@ defmodule FinanceSmithWeb.DashboardLive do
             <% end %>
           </div>
           <p class="mt-2 text-3xl font-mono text-gray-100 tracking-tight">
-            <%= @current_user.active_streams_count %>
+            {@current_user.active_streams_count}
           </p>
         </div>
       </div>
@@ -236,33 +235,26 @@ defmodule FinanceSmithWeb.DashboardLive do
         params={@tx_params}
         base_url={~p"/dashboard"}
         scope={:global}
+        categories={@categories}
       />
     </div>
     """
   end
 
-  # --- Aggregate / display helpers --------------------------------------------
+  # --- Helpers ----------------------------------------------------------------
+
+  defp apply_transactions(socket, tx_params) do
+    case TransactionLiveHelpers.fetch_transactions(socket.assigns.current_user, tx_params) do
+      {:ok, page} ->
+        assign(socket, :page, page)
+
+      {:error, _reason} ->
+        put_flash(socket, :error, "We have a... discrepancy. The ledger refused to open.")
+    end
+  end
 
   defp load_user_aggregates(user) do
     Ash.load!(user, @aggregate_fields, actor: user)
-  end
-
-  defp format_currency(nil), do: "$0.00"
-  defp format_currency(0), do: "$0.00"
-
-  defp format_currency(cents) when is_integer(cents) do
-    {sign, abs_cents} = if cents < 0, do: {"-", abs(cents)}, else: {"", cents}
-    dollars = div(abs_cents, 100)
-    remainder = rem(abs_cents, 100)
-
-    formatted_dollars =
-      dollars
-      |> Integer.to_string()
-      |> String.reverse()
-      |> String.replace(~r/.{3}(?=.)/, "\\0,")
-      |> String.reverse()
-
-    "#{sign}$#{formatted_dollars}.#{String.pad_leading(Integer.to_string(remainder), 2, "0")}"
   end
 
   defp create_link_token(user) do

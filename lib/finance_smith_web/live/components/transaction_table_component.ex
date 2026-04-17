@@ -1,14 +1,19 @@
 defmodule FinanceSmithWeb.TransactionTableComponent do
   use FinanceSmithWeb, :live_component
 
+  alias FinanceSmith.Banking.PlaidCategories
+  alias FinanceSmithWeb.MoneyFormat
+
   @doc """
   A reusable, paginated, filterable transaction table.
 
   ## Required assigns
 
-    * `:page`     - An `Ash.Page.Keyset` result (or `nil` when loading).
-    * `:params`   - A map of parsed filter/sort state (from the parent's `handle_params`).
-    * `:base_url` - The parent route path used to build patch URLs (e.g. `"/dashboard"`).
+    * `:page`       - An `Ash.Page.Keyset` result (or `nil` when loading).
+    * `:params`     - A map of parsed filter/sort state (from the parent's `handle_params`).
+    * `:base_url`   - The parent route path used to build patch URLs (e.g. `"/dashboard"`).
+    * `:categories` - A list of `personal_finance_category` strings from the DB for the
+                      current scope (household, connection, or account).
 
   ## Optional assigns
 
@@ -17,48 +22,13 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
                     on an account-scoped view).
   """
 
-  @plaid_categories [
-    "FOOD_AND_DRINK_RESTAURANTS",
-    "FOOD_AND_DRINK_FAST_FOOD",
-    "FOOD_AND_DRINK_GROCERIES",
-    "FOOD_AND_DRINK_COFFEE",
-    "FOOD_AND_DRINK_BAR",
-    "TRANSPORTATION_GAS",
-    "TRANSPORTATION_PARKING",
-    "TRANSPORTATION_TAXI",
-    "TRANSPORTATION_PUBLIC_TRANSIT",
-    "TRAVEL_FLIGHTS",
-    "TRAVEL_HOTELS",
-    "SHOPPING_CLOTHING",
-    "SHOPPING_ELECTRONICS",
-    "SHOPPING_GENERAL_MERCHANDISE",
-    "ENTERTAINMENT_STREAMING",
-    "ENTERTAINMENT_MOVIES",
-    "ENTERTAINMENT_SPORTS",
-    "GENERAL_MERCHANDISE_ONLINE_MARKETPLACES",
-    "PERSONAL_CARE_GYMS_AND_FITNESS",
-    "HOME_IMPROVEMENT_HARDWARE",
-    "MEDICAL_HEALTHCARE",
-    "RENT_AND_UTILITIES_RENT",
-    "RENT_AND_UTILITIES_ELECTRICITY",
-    "RENT_AND_UTILITIES_GAS_AND_UTILITIES",
-    "RENT_AND_UTILITIES_INTERNET",
-    "RENT_AND_UTILITIES_PHONE",
-    "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
-    "LOAN_PAYMENTS_MORTGAGE",
-    "INCOME_WAGES",
-    "INCOME_OTHER",
-    "TRANSFER_IN",
-    "TRANSFER_OUT"
-  ]
-
   @impl true
   def update(assigns, socket) do
     {:ok,
      socket
      |> assign(assigns)
      |> assign_new(:scope, fn -> :global end)
-     |> assign_new(:categories, fn -> @plaid_categories end)}
+     |> assign_new(:categories, fn -> [] end)}
   end
 
   @impl true
@@ -67,7 +37,7 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
     <div class="border border-gray-800 rounded-lg bg-gray-950 overflow-hidden">
       <%!-- Filter bar --%>
       <div class="border-b border-gray-800 px-4 py-3 bg-black flex flex-wrap items-center gap-3">
-        <p class="font-mono text-[10px] uppercase tracking-widest text-gray-500 mr-auto">
+        <p class="font-mono text-[10px] uppercase tracking-widest text-gray-500 shrink-0">
           Transactions
         </p>
         <form
@@ -76,7 +46,7 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
           phx-target={@myself}
           class="flex flex-wrap items-center gap-2"
         >
-          <input
+          <.input
             type="search"
             name="search"
             value={@params.search}
@@ -85,38 +55,33 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
             class="bg-gray-900 border border-gray-800 rounded text-gray-200 font-mono text-xs px-2 py-1.5 placeholder-gray-600 focus:outline-none focus:border-gray-600 w-40"
           />
 
-          <input
+          <.input
             type="date"
             name="date_from"
             value={@params.date_from}
-            class="bg-gray-900 border border-gray-800 rounded text-gray-400 font-mono text-xs px-2 py-1.5 focus:outline-none focus:border-gray-600"
+            class="bg-gray-900 border border-gray-800 rounded text-gray-400 font-mono text-xs px-2 py-1.5 focus:outline-none focus:border-gray-600 w-36"
           />
-          <span class="font-mono text-[10px] text-gray-600">to</span>
-          <input
+          <span class="font-mono text-[10px] text-gray-600 shrink-0">to</span>
+          <.input
             type="date"
             name="date_to"
             value={@params.date_to}
-            class="bg-gray-900 border border-gray-800 rounded text-gray-400 font-mono text-xs px-2 py-1.5 focus:outline-none focus:border-gray-600"
+            class="bg-gray-900 border border-gray-800 rounded text-gray-400 font-mono text-xs px-2 py-1.5 focus:outline-none focus:border-gray-600 w-36"
           />
 
-          <select
+          <.input
+            type="select"
             name="category"
-            class="bg-gray-900 border border-gray-800 rounded text-gray-400 font-mono text-[10px] uppercase tracking-wider px-2 py-1.5 focus:outline-none focus:border-gray-600"
-          >
-            <option value="">All Categories</option>
-            <option
-              :for={cat <- @categories}
-              value={cat}
-              selected={@params.category == cat}
-            >
-              {format_category(cat)}
-            </option>
-          </select>
+            value={@params.category}
+            prompt="All Categories"
+            options={Enum.map(@categories, &{PlaidCategories.format(&1), &1})}
+            class="bg-gray-900 border border-gray-800 rounded text-gray-400 font-mono text-[10px] uppercase tracking-wider px-2 py-1.5 focus:outline-none focus:border-gray-600 w-64 max-w-full"
+          />
 
           <%= if has_active_filters?(@params) do %>
             <.link
-              patch={build_url(@base_url, %{@params | search: nil, date_from: nil, date_to: nil, category: nil, after_cursor: nil, before_cursor: nil})}
-              class="font-mono text-[10px] uppercase tracking-widest text-gray-600 hover:text-gray-400 transition-colors"
+              patch={build_url(@base_url, clear_filters_params(@params))}
+              class="font-mono text-[10px] uppercase tracking-widest text-gray-600 hover:text-gray-400 transition-colors shrink-0"
             >
               Clear
             </.link>
@@ -189,7 +154,7 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
                   <% end %>
                 </td>
                 <td class="px-4 py-3 font-mono text-[10px] uppercase tracking-wider text-gray-500">
-                  {format_category(txn.personal_finance_category) || "—"}
+                  {PlaidCategories.format(txn.personal_finance_category) || "—"}
                 </td>
                 <%= if @scope != :account do %>
                   <td class="px-4 py-3 text-xs text-gray-400">
@@ -200,7 +165,7 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
                   </td>
                 <% end %>
                 <td class={"px-4 py-3 font-mono text-sm text-right #{amount_class(txn.amount)}"}>
-                  {format_amount(txn.amount)}
+                  {MoneyFormat.format(txn.amount, style: :signed)}
                 </td>
               </tr>
             <% end %>
@@ -210,7 +175,7 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
 
       <%!-- Keyset pagination bar --%>
       <div class="flex items-center justify-between px-4 py-3 border-t border-gray-800 bg-black">
-        <%= if @page && @page.before do %>
+        <%= if show_previous?(@params, @page) do %>
           <.link
             patch={build_url(@base_url, %{@params | before_cursor: @page.before, after_cursor: nil})}
             class="font-mono text-[10px] uppercase tracking-widest px-3 py-1.5 rounded border border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-200 transition-colors"
@@ -224,12 +189,12 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
         <% end %>
 
         <span class="font-mono text-[10px] text-gray-600">
-          <%= if @page && length(@page.results) > 0 do %>
-            {length(@page.results)} entries
+          <%= if @page && is_integer(@page.count) do %>
+            {@page.count} total
           <% end %>
         </span>
 
-        <%= if @page && @page.after do %>
+        <%= if @page && @page.more? do %>
           <.link
             patch={build_url(@base_url, %{@params | after_cursor: @page.after, before_cursor: nil})}
             class="font-mono text-[10px] uppercase tracking-widest px-3 py-1.5 rounded border border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-200 transition-colors"
@@ -316,30 +281,29 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
     params.search || params.date_from || params.date_to || params.category
   end
 
+  # Only show "Previous" when the user has actually paged forward or backward,
+  # because keyset pages always expose a `before` cursor once results exist.
+  defp show_previous?(_params, nil), do: false
+  defp show_previous?(_params, %{before: nil}), do: false
+  defp show_previous?(%{after_cursor: nil, before_cursor: nil}, _page), do: false
+  defp show_previous?(_params, _page), do: true
+
   # --- Display helpers --------------------------------------------------------
-
-  defp format_category(nil), do: nil
-
-  defp format_category(cat) do
-    cat
-    |> String.split("_")
-    |> Enum.map_join(" ", &String.capitalize/1)
-  end
 
   defp amount_class(nil), do: "text-gray-400"
   defp amount_class(cents) when cents < 0, do: "text-emerald-500"
   defp amount_class(_), do: "text-gray-200"
 
-  defp format_amount(nil), do: "—"
-
-  defp format_amount(cents) when cents < 0 do
-    dollars = abs(cents) / 100
-    "+$#{:erlang.float_to_binary(dollars, [{:decimals, 2}])}"
-  end
-
-  defp format_amount(cents) do
-    dollars = cents / 100
-    "-$#{:erlang.float_to_binary(dollars, [{:decimals, 2}])}"
+  defp clear_filters_params(params) do
+    %{
+      params
+      | search: nil,
+        date_from: nil,
+        date_to: nil,
+        category: nil,
+        after_cursor: nil,
+        before_cursor: nil
+    }
   end
 
   defp nilify(""), do: nil
