@@ -65,6 +65,18 @@ defmodule FinanceSmith.Banking.Account do
     end
   end
 
+  policies do
+    policy action_type(:read) do
+      authorize_if expr(plaid_item.user_id == ^actor(:id))
+    end
+
+    # Writes are system-only. SyncWorker performs account writes with
+    # authorize?: false, bypassing policies.
+    policy action_type([:create, :update, :destroy]) do
+      forbid_if always()
+    end
+  end
+
   attributes do
     uuid_v7_primary_key :id
 
