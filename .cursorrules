@@ -25,18 +25,32 @@ Modern, highly usable Fintech first; subtle Matrix accents only.
 
 ## Core Tech Stack & UI Framework
 - **Backend/State:** Elixir, Phoenix LiveView (HEEx), Ash Framework. Use `ash_phoenix` patterns where the web layer is present.
-- **Styling:** Tailwind CSS + **PetalComponents** only. Do not use DaisyUI, Bootstrap, or custom CSS classes.
-- **Petal Overrides:** If a Petal component exists (`<.button>`, `<.table>`, `<.card>`, `<.badge>`), you MUST use it. **However, you must aggressively override Petal's default classes using the `class` attribute to enforce the dark, border-heavy `bg-gray-950 border-gray-800` aesthetic (e.g., `<.card variant="outline" class="bg-gray-950 border-gray-800">`).**
+- **Styling:** Tailwind CSS only. Do not use DaisyUI, Bootstrap, or ad-hoc CSS class definitions outside Tailwind's utility system.
+- **Component Strategy:** See **UI & Frontend Guidelines: The Hybrid Approach** below. PetalComponents are required for Core UI, and forbidden for data-dense Domain UI. There is no blanket "use Petal everywhere" rule.
+
+## UI & Frontend Guidelines: The Hybrid Approach
+Finance Smith uses a **hybrid UI model**: PetalComponents for generic interface primitives, and custom semantic HEEx + Tailwind for data-dense, Ash-backed domain surfaces. Pick the right side of the boundary before you write a template.
+
+- **Core UI — PetalComponents required.** Use Petal for all generic, reusable interface primitives:
+  - Buttons (`<.button>`), form inputs and labels (`<.input>`, `<.field>`), modals/dialogs, alerts / flash / toast surfaces, badges (`<.badge>`), dropdowns and menus.
+  - You MUST aggressively override Petal defaults with the `class` attribute to enforce the dark, border-heavy `bg-gray-950 border-gray-800` aesthetic (e.g., `<.button class="bg-gray-950 border border-gray-800 text-gray-100 hover:border-emerald-500">`).
+  - Rationale: consistency, accessibility, and faster iteration on widgets that are not domain-specific.
+
+- **Domain UI — custom HEEx + Tailwind; Petal wrappers forbidden.** Hand-author semantic HEEx for complex, data-dense, Ash-backed visualizations:
+  - Transaction ledger / tables, account cards and account lists, dynamic filter / group / sort toolbars, Ash-paginated lists, and dashboard data visualizations.
+  - Do **not** wrap these in Petal `<.table>`, `<.card>`, or similar layout components — use native `<table>`, `<section>`, `<article>`, `<ul>`, and grid/flex Tailwind utilities directly.
+  - Rationale: Domain UI needs fine-grained control over LiveView `stream` rendering (`phx-update="stream"`, row-level `:id`), custom responsive layouts (sticky headers, column truncation, density toggles), and Ash pagination / keyset / offset integration. Petal's opinionated wrappers obstruct all three.
+  - Individual Core UI primitives (e.g., a Petal `<.button>` inside a custom-authored table cell) are still allowed and encouraged — the ban is on using Petal layout/table/card components as the container for Domain UI.
 
 ## Ash Framework & UI
 - **No Ecto in UI:** Do not use `Ecto.Changeset` directly in LiveViews or controllers.
-- **Forms:** Use `AshPhoenix.Form.for_action/3` (or `for_create` / `for_update`). In HEEx, map form inputs to Ash action arguments via Petal inputs: `<.input field={@form[:argument_name]} />`.
+- **Forms:** Use `AshPhoenix.Form.for_action/3` (or `for_create` / `for_update`). Forms are Core UI, so map form inputs to Ash action arguments via Petal inputs: `<.input field={@form[:argument_name]} />`.
 
 ## Figma MCP Integration
 When given a Figma URL to implement:
 1. Use the Figma MCP server to extract exact hex colors, typography sizes, and Auto Layout properties.
 2. Map Auto Layout constraints to Tailwind Flexbox/Grid utilities.
-3. Prefer **PetalComponents** HEEx components; keep the app data-dense and legible per the rules above.
+3. Apply the Hybrid Approach: map generic primitives (buttons, inputs, modals, badges) to PetalComponents; map data-dense domain surfaces (ledger, cards, filter bars, paginated lists) to custom semantic HEEx + Tailwind. Keep the app data-dense and legible per the rules above.
 4. **Petal UI kit (design reference):** [Official Petal UI kit (Community)](https://www.figma.com/design/6zsNQ4e8VbV2CnYOrNOsfM/Official-Petal-UI-kit--Community-?m=auto&t=401qAro9Roe7whhp-6) — when implementing from this file, map Figma elements to the corresponding Petal components and Tailwind patterns used in the kit.
 <!-- finance-smith-end -->
 

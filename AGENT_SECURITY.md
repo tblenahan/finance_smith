@@ -51,10 +51,11 @@ When you implement a `[PLANNED]` control from that document, update **both** `SE
 ## Authorization posture (current code)
 
 - **`FinanceSmith.Identity.User`** uses `Ash.Policy.Authorizer` with explicit policies and documented bypasses for registration, sign-in, and internal lockout actions.
-- **`Household`**, **`PlaidItem`**, **`Account`**, and **`Transaction`** do **not** declare `Ash.Policy.Authorizer`. Banking access is not policy-gated the same way as `User`.
-- **`authorize?: false`** is used intentionally for Oban workers, session/user resolution, and some internal change modules. **Do not** add new `authorize?: false` on **user-facing** LiveView or controller paths without explicit security review. New system-only paths should be commented as such.
+- **`FinanceSmith.Banking.PlaidItem`**, **`FinanceSmith.Banking.Account`**, and **`FinanceSmith.Banking.Transaction`** declare `Ash.Policy.Authorizer`. Reads are scoped to the actor via `user_id == ^actor(:id)` (through `plaid_item.user_id` for `Account` and `account.plaid_item.user_id` for `Transaction`). Writes are system-only and are `forbid_if always()` at the policy layer; Oban workers perform writes with `authorize?: false`. The sole user-facing write is `PlaidItem.create_from_public_token`, which requires an actor to be present.
+- **`Household`** does **not** yet declare `Ash.Policy.Authorizer`.
+- **`authorize?: false`** is used intentionally for Oban workers (`SyncWorker`, `TransactionProcessor`), session/user resolution, and some internal change modules. **Do not** add new `authorize?: false` on **user-facing** LiveView or controller paths without explicit security review. New system-only paths should be commented as such.
 
-When Ash policies are extended to banking resources, document the model in `SECURITY.md` and tighten this section.
+When Ash policies are extended to `Household`, document the model in `SECURITY.md` and tighten this section.
 
 ---
 
