@@ -344,7 +344,17 @@ defmodule FinanceSmithWeb.DashboardLive do
     """
   end
 
-  # --- Aggregate / display helpers --------------------------------------------
+  # --- Helpers ----------------------------------------------------------------
+
+  defp apply_transactions(socket, tx_params) do
+    case TransactionLiveHelpers.fetch_transactions(socket.assigns.current_user, tx_params) do
+      {:ok, page} ->
+        assign(socket, :page, page)
+
+      {:error, _reason} ->
+        put_flash(socket, :error, "We have a... discrepancy. The ledger refused to open.")
+    end
+  end
 
   defp apply_transactions(socket, tx_params) do
     user = socket.assigns.current_user
