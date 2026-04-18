@@ -3,7 +3,8 @@ defmodule FinanceSmith.Banking.PlaidItem do
     domain: FinanceSmith.Banking,
     data_layer: AshPostgres.DataLayer,
     extensions: [AshCloak],
-    notifiers: [Ash.Notifier.PubSub]
+    notifiers: [Ash.Notifier.PubSub],
+    authorizers: [Ash.Policy.Authorizer]
 
   postgres do
     table "plaid_items"
@@ -37,9 +38,47 @@ defmodule FinanceSmith.Banking.PlaidItem do
       change FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken
     end
 
+    read :read_for_ui do
+      description "UI-safe read that excludes the cloaked access_token column."
+
+      prepare build(
+                select: [
+                  :id,
+                  :plaid_item_id,
+                  :institution_name,
+                  :status,
+                  :last_synced_at,
+                  :user_id,
+                  :inserted_at,
+                  :updated_at
+                ]
+              )
+    end
+
     update :complete_sync do
       accept []
       change set_attribute(:last_synced_at, &DateTime.utc_now/0)
+    end
+  end
+
+  policies do
+    policy action_type(:read) do
+      authorize_if expr(user_id == ^actor(:id))
+    end
+
+    # User-facing create: any authenticated actor may call this action.
+    # `change relate_actor(:user)` in the action binds ownership.
+    policy action(:create_from_public_token) do
+      authorize_if actor_present()
+    end
+
+    # All other writes are system-only. SyncWorker / complete_sync call with
+    # `authorize?: false`, bypassing policies entirely. The `forbid_unless`
+    # passes (no decision) for :create_from_public_token, which is already
+    # covered by its own policy above; it forbids every other actor-driven write.
+    policy action_type([:create, :update, :destroy]) do
+      forbid_unless action(:create_from_public_token)
+      authorize_if always()
     end
   end
 
