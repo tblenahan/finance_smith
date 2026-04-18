@@ -34,3 +34,6 @@ data/
 # Editor
 .vscode/
 
+# Cursor — agent prompt files stay local (not committed)
+.cursor/agents/
+
