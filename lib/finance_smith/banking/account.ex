@@ -25,7 +25,11 @@ defmodule FinanceSmith.Banking.Account do
 
   policies do
     policy action_type(:read) do
-      authorize_if expr(plaid_item.user_id == ^actor(:id))
+      authorize_if expr(
+                     plaid_item.user_id == ^actor(:id) or
+                       (not is_nil(^actor(:household_id)) and
+                          plaid_item.user.household_id == ^actor(:household_id))
+                   )
     end
 
     # Writes are system-only. SyncWorker performs account writes with

@@ -63,7 +63,11 @@ defmodule FinanceSmith.Banking.PlaidItem do
 
   policies do
     policy action_type(:read) do
-      authorize_if expr(user_id == ^actor(:id))
+      authorize_if expr(
+                     user_id == ^actor(:id) or
+                       (not is_nil(^actor(:household_id)) and
+                          user.household_id == ^actor(:household_id))
+                   )
     end
 
     # User-facing create: any authenticated actor may call this action.
