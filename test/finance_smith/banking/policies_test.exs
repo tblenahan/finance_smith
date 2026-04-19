@@ -232,9 +232,12 @@ defmodule FinanceSmith.Banking.PoliciesTest do
   # ────────────────────────────────────────────────────────────────────────────
 
   defp share_household!(user1, user2) do
-    # Move user2 into user1's household so they share it.
+    # Move user2 into user1's household so they share it. household_id is not
+    # a public input on the default :update action, so force_change_attribute/3
+    # is used (test-only helper; mirrors other authorize?: false test setup).
     user2
-    |> Ash.Changeset.for_update(:update, %{household_id: user1.household_id})
+    |> Ash.Changeset.for_update(:update, %{})
+    |> Ash.Changeset.force_change_attribute(:household_id, user1.household_id)
     |> Ash.update!(authorize?: false)
   end
 
