@@ -9,6 +9,7 @@ defmodule FinanceSmith.DataLake.KeyBuilderTest do
       plaid_item_id: "item_sandbox_abc123",
       access_token: "access-sandbox-xxx",
       status: :active,
+      user_id: "01938d00-0000-7000-8000-000000000042",
       user: %{
         household_id: "01938d00-0000-7000-8000-000000000099"
       }
@@ -23,7 +24,7 @@ defmodule FinanceSmith.DataLake.KeyBuilderTest do
       key = KeyBuilder.build(item, dt)
 
       assert key ==
-               "plaid_sync/01938d00-0000-7000-8000-000000000099/item_sandbox_abc123/2026/03/2026-03-15T14-30-45.123456Z.json"
+               "plaid_sync/01938d00-0000-7000-8000-000000000099/01938d00-0000-7000-8000-000000000042/item_sandbox_abc123/2026/03/2026-03-15T14-30-45.123456Z.json"
     end
 
     test "zero-pads single-digit months" do
@@ -62,7 +63,9 @@ defmodule FinanceSmith.DataLake.KeyBuilderTest do
 
   describe "extract_plaid_item_id/1" do
     test "extracts the Plaid item ID from a well-formed key" do
-      key = "plaid_sync/household-uuid/item_sandbox_abc123/2026/03/2026-03-15T14-30-45Z.json"
+      key =
+        "plaid_sync/household-uuid/user-uuid/item_sandbox_abc123/2026/03/2026-03-15T14-30-45Z.json"
+
       assert {:ok, "item_sandbox_abc123"} = KeyBuilder.extract_plaid_item_id(key)
     end
 
@@ -79,7 +82,7 @@ defmodule FinanceSmith.DataLake.KeyBuilderTest do
     end
 
     test "handles keys with extra path segments" do
-      key = "plaid_sync/hh-id/item_id/2026/03/timestamp.json"
+      key = "plaid_sync/hh-id/user-id/item_id/2026/03/timestamp.json"
       assert {:ok, "item_id"} = KeyBuilder.extract_plaid_item_id(key)
     end
   end

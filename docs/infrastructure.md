@@ -129,16 +129,17 @@ Configured in [`config/config.exs`](../config/config.exs): **Oban** uses `Financ
 **Replay / backfill** a specific archived object:
 
 ```elixir
-FinanceSmith.DataLake.ProcessWorker.enqueue("plaid_sync/{household_uuid}/{plaid_item_id}/2026/03/{timestamp}.json")
+FinanceSmith.DataLake.ProcessWorker.enqueue("plaid_sync/{household_uuid}/{user_uuid}/{plaid_item_id}/2026/03/{timestamp}.json")
 ```
 
 ### B2 object keys
 
 [`lib/finance_smith/data_lake/key_builder.ex`](../lib/finance_smith/data_lake/key_builder.ex) builds:
 
-`plaid_sync/{household_id}/{plaid_item_id}/{YYYY}/{MM}/{timestamp}.json`
+`plaid_sync/{household_id}/{user_id}/{plaid_item_id}/{YYYY}/{MM}/{timestamp}.json`
 
 - `household_id` — UUID of the household (via loaded `user.household`).
+- `user_id` — UUID of the `Identity.User` that owns the PlaidItem (direct attribute; no extra load required).
 - `plaid_item_id` — **Plaid’s** item id string, not the internal Ash UUID.
 
 ---
