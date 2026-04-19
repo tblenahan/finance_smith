@@ -214,8 +214,13 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   defp extract_plaid_item_id!(object_key) do
     case KeyBuilder.extract_plaid_item_id(object_key) do
-      {:ok, id} -> id
-      :error -> raise "[TransactionProcessor] Malformed object key: #{object_key}"
+      {:ok, id} ->
+        id
+
+      :error ->
+        raise "[TransactionProcessor] Unrecognized key layout: #{object_key}. " <>
+                "Expected plaid_sync/{household_id}/{user_id}/{plaid_item_id}/YYYY/MM/timestamp.json. " <>
+                "Legacy 3-segment keys must be re-keyed before replay."
     end
   end
 
