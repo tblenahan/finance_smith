@@ -8,8 +8,12 @@ defmodule FinanceSmithWeb.UserRegistrationLive do
     socket =
       socket
       |> assign(:page_title, "Register")
+      |> assign(:mode, :create)
       |> assign(:email, "")
       |> assign(:password, "")
+      |> assign(:household_name, "")
+      |> assign(:existing_member_email, "")
+      |> assign(:existing_member_password, "")
       |> assign(:error, nil)
 
     {:ok, socket}
@@ -28,6 +32,38 @@ defmodule FinanceSmithWeb.UserRegistrationLive do
 
       <.card variant="outline">
         <.card_content>
+          <%!-- Mode toggle --%>
+          <div class="flex mb-6 border border-gray-800 rounded overflow-hidden">
+            <button
+              type="button"
+              phx-click="set_mode"
+              phx-value-mode="create"
+              class={[
+                "flex-1 py-2 font-mono text-[10px] uppercase tracking-widest transition-colors",
+                if(@mode == :create,
+                  do: "bg-gray-800 text-gray-100",
+                  else: "bg-gray-950 text-gray-500 hover:text-gray-300"
+                )
+              ]}
+            >
+              Create Household
+            </button>
+            <button
+              type="button"
+              phx-click="set_mode"
+              phx-value-mode="join"
+              class={[
+                "flex-1 py-2 font-mono text-[10px] uppercase tracking-widest transition-colors border-l border-gray-800",
+                if(@mode == :join,
+                  do: "bg-gray-800 text-gray-100",
+                  else: "bg-gray-950 text-gray-500 hover:text-gray-300"
+                )
+              ]}
+            >
+              Join Existing
+            </button>
+          </div>
+
           <.form
             for={%{}}
             as={:user}
@@ -48,6 +84,39 @@ defmodule FinanceSmithWeb.UserRegistrationLive do
               value={@password}
               label="Password"
             />
+
+            <%!-- Create-mode: optional household name --%>
+            <div :if={@mode == :create}>
+              <.field
+                type="text"
+                name="user[household_name]"
+                value={@household_name}
+                label="Household Name"
+                placeholder="My Household"
+              />
+            </div>
+
+            <%!-- Join-mode: existing member credentials --%>
+            <div :if={@mode == :join} class="space-y-4">
+              <p class="font-mono text-[10px] uppercase tracking-widest text-gray-500 border border-gray-800 rounded px-3 py-2">
+                Existing member credentials are required to authorize the join.
+              </p>
+              <.field
+                type="email"
+                name="user[existing_member_email]"
+                value={@existing_member_email}
+                label="Existing Member Email"
+                autocomplete="off"
+              />
+              <.field
+                type="password"
+                name="user[existing_member_password]"
+                value={@existing_member_password}
+                label="Existing Member Password"
+                autocomplete="off"
+              />
+            </div>
+
             <.alert
               :if={@error}
               color="danger"
@@ -76,19 +145,62 @@ defmodule FinanceSmithWeb.UserRegistrationLive do
     """
   end
 
+  def handle_event("set_mode", %{"mode" => mode_str}, socket) do
+    mode = if mode_str == "join", do: :join, else: :create
+
+    {:noreply,
+     socket
+     |> assign(:mode, mode)
+     |> assign(:error, nil)
+     # Clear sensitive fields when switching modes
+     |> assign(:existing_member_password, "")
+     |> assign(:password, "")}
+  end
+
   def handle_event("validate", %{"user" => params}, socket) do
     {:noreply,
      socket
      |> assign(:email, params["email"] || "")
-     |> assign(:password, params["password"] || "")}
+     |> assign(:password, params["password"] || "")
+     |> assign(:household_name, params["household_name"] || "")
+     |> assign(:existing_member_email, params["existing_member_email"] || "")
+     |> assign(:existing_member_password, params["existing_member_password"] || "")}
   end
 
   def handle_event("dismiss_error", _params, socket) do
     {:noreply, assign(socket, :error, nil)}
   end
 
-  def handle_event("submit", %{"user" => %{"email" => email, "password" => password}}, socket) do
-    case Identity.register(email, password, authorize?: false) do
+  def handle_event("submit", %{"user" => params}, socket) do
+    email = params["email"] || ""
+    password = params["password"] || ""
+
+    result =
+      case socket.assigns.mode do
+        :create ->
+          household_name = params["household_name"] || ""
+
+          Identity.register(
+            email,
+            password,
+            %{household_name: if(household_name == "", do: "My Household", else: household_name)},
+            authorize?: false
+          )
+
+        :join ->
+          existing_member_email = params["existing_member_email"] || ""
+          existing_member_password = params["existing_member_password"] || ""
+
+          Identity.register_and_join(
+            email,
+            password,
+            existing_member_email,
+            existing_member_password,
+            authorize?: false
+          )
+      end
+
+    case result do
       {:ok, _user} ->
         {:noreply,
          socket
@@ -99,7 +211,8 @@ defmodule FinanceSmithWeb.UserRegistrationLive do
         {:noreply,
          socket
          |> assign(:error, AshErrorHTML.format_for_user(error))
-         |> assign(:password, "")}
+         |> assign(:password, "")
+         |> assign(:existing_member_password, "")}
     end
   end
 end

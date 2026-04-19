@@ -28,6 +28,7 @@ defmodule FinanceSmith.Identity.User do
 
       argument :password, :string do
         allow_nil? false
+        sensitive? true
         constraints min_length: 12
       end
 
@@ -37,6 +38,28 @@ defmodule FinanceSmith.Identity.User do
 
       validate FinanceSmith.Identity.User.Validations.PasswordComplexity
       change FinanceSmith.Identity.User.Changes.Register
+    end
+
+    create :register_and_join do
+      accept [:email]
+
+      argument :password, :string do
+        allow_nil? false
+        sensitive? true
+        constraints min_length: 12
+      end
+
+      argument :existing_member_email, :string do
+        allow_nil? false
+      end
+
+      argument :existing_member_password, :string do
+        allow_nil? false
+        sensitive? true
+      end
+
+      validate FinanceSmith.Identity.User.Validations.PasswordComplexity
+      change FinanceSmith.Identity.User.Changes.RegisterAndJoin
     end
 
     read :sign_in do
@@ -97,7 +120,7 @@ defmodule FinanceSmith.Identity.User do
 
   policies do
     # Registration and sign-in have no actor — anyone may attempt them.
-    bypass action(:register) do
+    bypass action([:register, :register_and_join]) do
       authorize_if always()
     end
 
