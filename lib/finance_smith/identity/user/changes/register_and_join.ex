@@ -75,7 +75,7 @@ defmodule FinanceSmith.Identity.User.Changes.RegisterAndJoin do
     hashed = Bcrypt.hash_pwd_salt(password)
 
     cs
-    |> Ash.Changeset.change_attribute(:password_hash, hashed)
+    |> Ash.Changeset.force_change_attribute(:password_hash, hashed)
     |> Ash.Changeset.manage_relationship(:household, existing_user.household,
       type: :append_and_remove
     )
