@@ -220,4 +220,124 @@ defmodule FinanceSmith.Banking.PoliciesTest do
                )
     end
   end
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Household isolation
+  #
+  # Finance Smith allows household members to read each other's banking data.
+  # These tests verify:
+  #   (a) same-household actor can read another member's data
+  #   (b) different-household actor is denied
+  #   (c) actor with no shared household is denied
+  # ────────────────────────────────────────────────────────────────────────────
+
+  defp share_household!(user1, user2) do
+    # Move user2 into user1's household so they share it.
+    user2
+    |> Ash.Changeset.for_update(:update, %{household_id: user1.household_id})
+    |> Ash.update!(authorize?: false)
+  end
+
+  describe "Household isolation — PlaidItem reads" do
+    test "same-household member can read another member's PlaidItem" do
+      owner = register_user!()
+      member = register_user!()
+      _member = share_household!(owner, member)
+      # Reload member so it carries owner's household_id
+      member = Ash.get!(FinanceSmith.Identity.User, member.id, authorize?: false)
+
+      plaid_item = create_plaid_item!(owner)
+
+      assert {:ok, %PlaidItem{id: id}} =
+               Banking.get_plaid_item_by_id(plaid_item.id, actor: member)
+
+      assert id == plaid_item.id
+    end
+
+    test "different-household actor cannot read another user's PlaidItem" do
+      owner = register_user!()
+      outsider = register_user!()
+      plaid_item = create_plaid_item!(owner)
+
+      assert {:error, %Ash.Error.Invalid{errors: [%Ash.Error.Query.NotFound{} | _]}} =
+               Banking.get_plaid_item_by_id(plaid_item.id, actor: outsider)
+    end
+  end
+
+  describe "Household isolation — Account reads" do
+    test "same-household member can read another member's Account" do
+      owner = register_user!()
+      member = register_user!()
+      _member = share_household!(owner, member)
+      member = Ash.get!(FinanceSmith.Identity.User, member.id, authorize?: false)
+
+      plaid_item = create_plaid_item!(owner)
+      account = create_account!(plaid_item)
+
+      assert {:ok, %Account{id: id}} = Banking.get_account_by_id(account.id, actor: member)
+      assert id == account.id
+    end
+
+    test "different-household actor cannot read another user's Account" do
+      owner = register_user!()
+      outsider = register_user!()
+      plaid_item = create_plaid_item!(owner)
+      account = create_account!(plaid_item)
+
+      assert {:error, %Ash.Error.Invalid{errors: [%Ash.Error.Query.NotFound{} | _]}} =
+               Banking.get_account_by_id(account.id, actor: outsider)
+    end
+  end
+
+  describe "Household isolation — Transaction reads" do
+    test "same-household member can read another member's transactions" do
+      owner = register_user!()
+      member = register_user!()
+      _member = share_household!(owner, member)
+      member = Ash.get!(FinanceSmith.Identity.User, member.id, authorize?: false)
+
+      plaid_item = create_plaid_item!(owner)
+      account = create_account!(plaid_item)
+      _txn = create_transaction!(account)
+
+      assert {:ok, %Ash.Page.Keyset{results: [%Transaction{}]}} =
+               Banking.list_transactions(
+                 %{date_from: ~D[2024-01-01], date_to: ~D[2026-12-31]},
+                 actor: member,
+                 page: [limit: 25]
+               )
+    end
+
+    test "different-household actor cannot read another user's transactions" do
+      owner = register_user!()
+      outsider = register_user!()
+      plaid_item = create_plaid_item!(owner)
+      account = create_account!(plaid_item)
+      _txn = create_transaction!(account)
+
+      assert {:ok, %Ash.Page.Keyset{results: []}} =
+               Banking.list_transactions(
+                 %{date_from: ~D[2024-01-01], date_to: ~D[2026-12-31]},
+                 actor: outsider,
+                 page: [limit: 25]
+               )
+    end
+  end
+
+  describe "Household policy — reads and writes" do
+    test "user can read their own household" do
+      user = register_user!()
+
+      assert {:ok, %FinanceSmith.Identity.Household{}} =
+               Identity.get_household_with_kpis(user.household_id, actor: user)
+    end
+
+    test "user from a different household cannot read another household" do
+      owner = register_user!()
+      stranger = register_user!()
+
+      assert {:error, %Ash.Error.Invalid{errors: [%Ash.Error.Query.NotFound{} | _]}} =
+               Identity.get_household_with_kpis(owner.household_id, actor: stranger)
+    end
+  end
 end

@@ -51,11 +51,13 @@ When you implement a `[PLANNED]` control from that document, update **both** `SE
 ## Authorization posture (current code)
 
 - **`FinanceSmith.Identity.User`** uses `Ash.Policy.Authorizer` with explicit policies and documented bypasses for registration, sign-in, and internal lockout actions.
-- **`FinanceSmith.Banking.PlaidItem`**, **`FinanceSmith.Banking.Account`**, and **`FinanceSmith.Banking.Transaction`** declare `Ash.Policy.Authorizer`. Reads are scoped to the actor via `user_id == ^actor(:id)` (through `plaid_item.user_id` for `Account` and `account.plaid_item.user_id` for `Transaction`). Writes are system-only and are `forbid_if always()` at the policy layer; Oban workers perform writes with `authorize?: false`. The sole user-facing write is `PlaidItem.create_from_public_token`, which requires an actor to be present.
-- **`Household`** does **not** yet declare `Ash.Policy.Authorizer`.
+- **`FinanceSmith.Banking.PlaidItem`**, **`FinanceSmith.Banking.Account`**, and **`FinanceSmith.Banking.Transaction`** declare `Ash.Policy.Authorizer`. Reads are authorized for the actor via a two-branch expression:
+  1. **Personal ownership:** `user_id == ^actor(:id)` (direct on `PlaidItem`, via relationship path for `Account` and `Transaction`).
+  2. **Household membership:** `^actor(:household_id)` matches the owning user's `household_id`, allowing all members of the same household to read each other's Plaid items, accounts, and transactions.
+  Writes are system-only and are `forbid_if always()` at the policy layer; Oban workers perform writes with `authorize?: false`. The sole user-facing write is `PlaidItem.create_from_public_token`, which requires an actor to be present.
+- **`FinanceSmith.Identity.Household`** declares `Ash.Policy.Authorizer`. Reads are restricted to the actor whose `household_id` matches the record's `id`. All write actions are `forbid_if always()` at the policy layer; household creation is system-only via `authorize?: false` in registration logic.
 - **`authorize?: false`** is used intentionally for Oban workers (`SyncWorker`, `TransactionProcessor`), session/user resolution, and some internal change modules. **Do not** add new `authorize?: false` on **user-facing** LiveView or controller paths without explicit security review. New system-only paths should be commented as such.
-
-When Ash policies are extended to `Household`, document the model in `SECURITY.md` and tighten this section.
+- **Household read-sharing scope:** All members of a household can read all banking data belonging to any member of that household. This is intentional: Finance Smith is a single-household application and household members are trusted. If a multi-household deployment model is ever needed, add Ash multitenancy and re-scope policies.
 
 ---
 

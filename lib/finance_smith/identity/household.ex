@@ -1,7 +1,8 @@
 defmodule FinanceSmith.Identity.Household do
   use Ash.Resource,
     domain: FinanceSmith.Identity,
-    data_layer: AshPostgres.DataLayer
+    data_layer: AshPostgres.DataLayer,
+    authorizers: [Ash.Policy.Authorizer]
 
   postgres do
     table "households"
@@ -15,6 +16,19 @@ defmodule FinanceSmith.Identity.Household do
     create :create do
       primary? true
       accept [:name]
+    end
+  end
+
+  policies do
+    # A user may only read their own household.
+    policy action_type(:read) do
+      authorize_if expr(id == ^actor(:household_id))
+    end
+
+    # Household records are created and managed by internal registration logic
+    # (authorize?: false). User-facing write attempts are always denied.
+    policy action_type([:create, :update, :destroy]) do
+      forbid_if always()
     end
   end
 

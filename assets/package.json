@@ -5,6 +5,9 @@
     "build:css": "npx tailwindcss -i ./css/app.css -o ../priv/static/assets/app.css",
     "watch:css": "npx tailwindcss -i ./css/app.css -o ../priv/static/assets/app.css --watch"
   },
+  "dependencies": {
+    "echarts": "^5.5.0"
+  },
   "devDependencies": {
     "tailwindcss": "^3.4.0"
   }
