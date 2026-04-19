@@ -65,7 +65,7 @@ defmodule FinanceSmith.DataLake.B2.AuthServer do
 
       {:error, reason} ->
         Logger.error(
-          "[B2.AuthServer] Initial authorization failed: #{inspect(reason)}. B2 uploads and downloads will be unavailable until refresh/0 is called."
+          "[B2.AuthServer] Initial authorization failed (#{format_reason_for_log(reason)}). B2 uploads and downloads will be unavailable until refresh/0 is called."
         )
 
         {:noreply, nil}
@@ -88,7 +88,7 @@ defmodule FinanceSmith.DataLake.B2.AuthServer do
         {:reply, :ok, new_state}
 
       {:error, reason} ->
-        Logger.error("[B2.AuthServer] Refresh failed: #{inspect(reason)}")
+        Logger.error("[B2.AuthServer] Refresh failed (#{format_reason_for_log(reason)})")
         {:reply, {:error, reason}, nil}
     end
   end
@@ -125,7 +125,7 @@ defmodule FinanceSmith.DataLake.B2.AuthServer do
 
       status ->
         Logger.error(
-          "[B2.AuthServer] Authorization failed. status=#{status} code=#{inspect(response.body["code"])} message=#{inspect(response.body["message"])}"
+          "[B2.AuthServer] Authorization failed. status=#{status} #{b2_body_log_fragment(response.body)}"
         )
 
         {:error, {:b2_auth_failed, status, response.body}}
@@ -194,4 +194,38 @@ defmodule FinanceSmith.DataLake.B2.AuthServer do
         {:error, {:b2_list_buckets_failed, status, response.body}}
     end
   end
+
+  defp format_reason_for_log(:credentials_not_configured), do: "credentials_not_configured"
+
+  defp format_reason_for_log({:b2_auth_failed, status, body}) do
+    "b2_auth_failed status=#{status} #{b2_body_log_fragment(body)}"
+  end
+
+  defp format_reason_for_log({:b2_list_buckets_failed, status, body}) do
+    "b2_list_buckets_failed status=#{status} #{b2_body_log_fragment(body)}"
+  end
+
+  defp format_reason_for_log({:b2_bucket_not_found, name}) do
+    "b2_bucket_not_found bucket=#{inspect(name)}"
+  end
+
+  defp format_reason_for_log(reason) when is_atom(reason), do: Atom.to_string(reason)
+
+  defp format_reason_for_log(_reason), do: "unexpected_error(redacted)"
+
+  defp b2_body_log_fragment(body) when is_map(body) do
+    "code=#{inspect(body["code"])} message=#{inspect(body["message"])}"
+  end
+
+  defp b2_body_log_fragment(body) when is_binary(body) do
+    "non_json_body bytes=#{byte_size(body)}"
+  end
+
+  defp b2_body_log_fragment(body) when is_list(body) do
+    "json_array len=#{length(body)}"
+  end
+
+  defp b2_body_log_fragment(nil), do: "body=nil"
+
+  defp b2_body_log_fragment(_body), do: "body=(unexpected_shape)"
 end
