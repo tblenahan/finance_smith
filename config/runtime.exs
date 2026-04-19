@@ -1,5 +1,9 @@
 import Config
 
+log_dir = System.get_env("LOG_DIR", "logs")
+config :logger, :error_log, path: Path.join(log_dir, "error.log")
+config :finance_smith, :log_dir, log_dir
+
 if config_env() == :prod do
   secret_key_base =
     System.get_env("SECRET_KEY_BASE") ||
