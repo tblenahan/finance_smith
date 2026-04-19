@@ -7,6 +7,8 @@ defmodule FinanceSmith.Application do
 
   @impl true
   def start(_type, _args) do
+    File.mkdir_p!("logs")
+
     children = [
       FinanceSmith.Repo,
       FinanceSmith.Vault,

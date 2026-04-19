@@ -37,3 +37,7 @@ data/
 # Cursor — agent prompt files stay local (not committed)
 .cursor/agents/
 
+# Logs
+/logs/
+*.log
+
