@@ -33,7 +33,7 @@ defmodule FinanceSmith.MixProject do
       {:sourceror, "~> 1.8", only: [:dev, :test]},
       {:lazy_html, ">= 0.0.0", only: :test},
       {:mox, "~> 1.0", only: :test},
-      {:simple_sat, "~> 0.1", only: [:dev, :test]},
+      {:simple_sat, "~> 0.1"},
       {:ash_postgres, "~> 2.0"},
       {:ash, "~> 3.0"},
       {:ash_cloak, "~> 0.2.0"},
