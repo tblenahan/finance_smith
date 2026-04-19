@@ -38,7 +38,15 @@ defmodule FinanceSmith.Banking.Transaction do
     defaults [:read, :destroy, create: :*, update: :*]
 
     read :for_chart do
-      description "Returns lightweight transaction rows for chart rendering. No pagination — caller is responsible for scoping via arguments."
+      description """
+      Returns lightweight transaction rows for chart rendering. No pagination —
+      caller is responsible for scoping via arguments.
+
+      `date_from` is optional. When omitted (the \"All\" timeframe), the query
+      returns all transactions in scope up to the hard row cap of 10,000, sorted
+      oldest-first. The chart then spans from the earliest returned transaction
+      date to today, giving a view of the full transaction history within the cap.
+      """
 
       argument :date_from, :date, allow_nil?: true
       argument :plaid_item_id, :uuid, allow_nil?: true
@@ -46,7 +54,8 @@ defmodule FinanceSmith.Banking.Transaction do
 
       prepare build(
                 select: [:date, :amount, :personal_finance_category],
-                sort: [date: :asc]
+                sort: [date: :asc],
+                limit: 10_000
               )
 
       filter expr(is_nil(^arg(:date_from)) or date >= ^arg(:date_from))

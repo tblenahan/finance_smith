@@ -160,7 +160,7 @@ defmodule FinanceSmithWeb.DashboardLive do
   end
 
   def handle_info(%{topic: "transaction:created", payload: %Ash.Notifier.Notification{}}, socket) do
-    {:noreply, apply_transactions(socket, socket.assigns.tx_params)}
+    {:noreply, refresh_scope_data(socket, socket.assigns.view_scope)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -336,6 +336,8 @@ defmodule FinanceSmithWeb.DashboardLive do
             id="resizer"
             role="separator"
             aria-label="Resize panels"
+            aria-orientation="vertical"
+            tabindex="0"
             class="w-4 cursor-col-resize bg-gray-800 hover:bg-gray-700 flex-shrink-0 transition-colors z-10 mx-1 rounded"
           >
           </div>
@@ -363,7 +365,6 @@ defmodule FinanceSmithWeb.DashboardLive do
         params={@tx_params}
         base_url={~p"/dashboard"}
         scope={:global}
-        view_scope={@view_scope}
         categories={@categories}
       />
     </div>
@@ -508,7 +509,7 @@ defmodule FinanceSmithWeb.DashboardLive do
           :inflow_30d,
           :active_streams_count
         ],
-        authorize?: false
+        actor: user
       )
 
     %{
@@ -571,6 +572,8 @@ defmodule FinanceSmithWeb.DashboardLive do
       "6M" -> Date.add(today, -179)
       "9M" -> Date.add(today, -269)
       "1Y" -> Date.add(today, -364)
+      # "All" passes nil so the chart spans the full transaction history.
+      # The 10,000-row cap in Transaction.for_chart bounds memory use.
       "All" -> nil
       _ -> Date.add(today, -29)
     end

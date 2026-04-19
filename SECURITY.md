@@ -177,7 +177,7 @@ This sharing model is intentional: Finance Smith is a single-household tool and 
 
 #### `[ACTIVE]` Household aggregate reads
 
-[`FinanceSmith.Identity.Household`](lib/finance_smith/identity/household.ex) and [`FinanceSmith.Identity.User`](lib/finance_smith/identity/user.ex) expose Ash aggregates (`total_assets`, `total_liabilities`, `outflow_30d`, `inflow_30d`, `active_streams_count`) that are computed in SQL over the household's or user's banking data. `Household` does not use `Ash.Policy.Authorizer` (it contains no raw sensitive data); access to it is controlled in the application layer by requiring an authenticated session.
+[`FinanceSmith.Identity.Household`](lib/finance_smith/identity/household.ex) and [`FinanceSmith.Identity.User`](lib/finance_smith/identity/user.ex) expose Ash aggregates (`total_assets`, `total_liabilities`, `outflow_30d`, `inflow_30d`, `active_streams_count`) that are computed in SQL over the household's or user's banking data. `Household` uses `Ash.Policy.Authorizer`: reads are restricted to the actor whose `household_id` matches the record's `id`; all write actions are denied at the policy layer.
 
 #### `[PLANNED]` Ash multitenancy
 

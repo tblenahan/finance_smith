@@ -62,6 +62,8 @@ defmodule FinanceSmith.Repo.Migrations.AddTransactionIndexesAndIdentity do
   end
 
   def down do
+    # NOTE: The deduplication performed in up/0 is not reversible. Rolling back
+    # restores the old compound index but cannot recover the deleted duplicate rows.
     drop_if_exists(
       unique_index(:transactions, [:plaid_transaction_id],
         name: "transactions_unique_plaid_id_index",

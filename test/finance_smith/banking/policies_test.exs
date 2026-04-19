@@ -323,4 +323,21 @@ defmodule FinanceSmith.Banking.PoliciesTest do
                )
     end
   end
+
+  describe "Household policy — reads and writes" do
+    test "user can read their own household" do
+      user = register_user!()
+
+      assert {:ok, %FinanceSmith.Identity.Household{}} =
+               Identity.get_household_with_kpis(user.household_id, actor: user)
+    end
+
+    test "user from a different household cannot read another household" do
+      owner = register_user!()
+      stranger = register_user!()
+
+      assert {:error, %Ash.Error.Invalid{errors: [%Ash.Error.Query.NotFound{} | _]}} =
+               Identity.get_household_with_kpis(owner.household_id, actor: stranger)
+    end
+  end
 end
