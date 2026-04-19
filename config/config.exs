@@ -96,9 +96,6 @@ config :finance_smith, Oban,
   ],
   queues: [data_lake: 5]
 
-config :logger,
-  backends: [:console, {LoggerFileBackend, :error_log}]
-
 config :logger, :error_log,
   level: :warning,
   max_bytes: 10_000_000,

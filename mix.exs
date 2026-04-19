@@ -22,7 +22,7 @@ defmodule FinanceSmith.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger, :crypto],
+      extra_applications: [:logger, :logger_backends, :crypto],
       mod: {FinanceSmith.Application, []}
     ]
   end
@@ -63,6 +63,7 @@ defmodule FinanceSmith.MixProject do
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 0.24"},
       {:logger_file_backend, "~> 0.0.13"},
+      {:logger_backends, "~> 1.0"},
       {:esbuild, "~> 0.8", runtime: Mix.env() == :dev}
     ]
   end
