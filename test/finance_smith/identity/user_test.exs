@@ -201,6 +201,13 @@ defmodule FinanceSmith.Identity.UserTest do
                  authorize?: false
                )
     end
+
+    test "register_and_join is permitted for a nil actor (policy bypass)" do
+      # Regression guard: if :register_and_join is ever removed from the policy
+      # bypass block, this test fails loudly rather than silently breaking
+      # unauthenticated registration.
+      assert Ash.can?({FinanceSmith.Identity.User, :register_and_join}, nil)
+    end
   end
 
   # ---------------------------------------------------------------------------

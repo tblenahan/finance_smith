@@ -41,6 +41,9 @@ defmodule FinanceSmith.Identity.User.Changes.RegisterAndJoin do
   end
 
   defp look_up_existing_member(email) do
+    # authorize?: false: internal credential-gate lookup during registration,
+    # where no actor exists. Result is consumed only by Bcrypt.verify_pass/2
+    # and never returned to the caller.
     FinanceSmith.Identity.User
     |> Ash.Query.filter(email == ^email)
     |> Ash.Query.limit(1)

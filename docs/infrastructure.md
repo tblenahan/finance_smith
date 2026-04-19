@@ -142,6 +142,16 @@ FinanceSmith.DataLake.ProcessWorker.enqueue("plaid_sync/{household_uuid}/{user_u
 - `user_id` — UUID of the `Identity.User` that owns the PlaidItem (direct attribute; no extra load required).
 - `plaid_item_id` — **Plaid’s** item id string, not the internal Ash UUID.
 
+#### Legacy key layout migration
+
+Objects archived before commit `caf4653` ("Include user_id in B2 plaid_sync object key path") use a 3-segment layout that omits the `user_id`:
+
+```
+plaid_sync/{household_id}/{plaid_item_id}/{YYYY}/{MM}/{timestamp}.json
+```
+
+`KeyBuilder.extract_plaid_item_id/1` does **not** parse this shape (returns `:error`), so `TransactionProcessor` will raise on any attempt to replay such an object. Before replaying legacy archives, re-key them to the current 4-segment format in B2 (copy-then-delete or a one-time migration script). No code path writes the old format.
+
 ---
 
 ## Local PostgreSQL (Docker Compose)

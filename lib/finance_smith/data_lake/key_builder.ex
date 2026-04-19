@@ -13,6 +13,14 @@ defmodule FinanceSmith.DataLake.KeyBuilder do
   - `YYYY/MM`       — Year and zero-padded month derived from the provided UTC DateTime.
   - `timestamp`     — ISO 8601 UTC timestamp with microseconds, with colons
     replaced by dashes to ensure filesystem safety.
+
+  ## Legacy key layout
+
+  A previous layout — `plaid_sync/{household_id}/{plaid_item_id}/{YYYY}/…` — omitted
+  the `user_id` segment. Keys in that form are **not** recognized by
+  `extract_plaid_item_id/1` and will return `:error`. Any objects archived under the
+  old layout must be re-keyed to the current format before they can be replayed by
+  `TransactionProcessor`.
   """
 
   alias FinanceSmith.Banking.PlaidItem
@@ -44,7 +52,8 @@ defmodule FinanceSmith.DataLake.KeyBuilder do
   @spec extract_plaid_item_id(String.t()) :: {:ok, String.t()} | :error
   def extract_plaid_item_id(object_key) do
     case String.split(object_key, "/") do
-      ["plaid_sync", _household_id, _user_id, plaid_item_id | _rest] when plaid_item_id != "" ->
+      ["plaid_sync", _household_id, _user_id, plaid_item_id, year | _rest]
+      when plaid_item_id != "" and byte_size(year) == 4 ->
         {:ok, plaid_item_id}
 
       _ ->

@@ -273,5 +273,29 @@ defmodule FinanceSmithWeb.UserRegistrationLiveTest do
       assert is_binary(html)
       assert has_element?(view, "button[type='submit']")
     end
+
+    test "shows an error when the new email is already taken, even with valid sponsor creds",
+         %{conn: conn} do
+      %{email: existing_email, password: existing_password} = register_existing!()
+
+      {:ok, view, _html} = live(conn, "/users/register")
+      render_click(view, "set_mode", %{"mode" => "join"})
+
+      # Attempt to register with the sponsor's own email as the new user email
+      html =
+        view
+        |> form("#register_form",
+          user: %{
+            email: existing_email,
+            password: "NewMember9!A",
+            existing_member_email: existing_email,
+            existing_member_password: existing_password
+          }
+        )
+        |> render_submit()
+
+      assert html =~ ~r/taken|already|unique|invalid/i
+      assert Process.alive?(view.pid)
+    end
   end
 end

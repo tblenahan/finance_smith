@@ -85,5 +85,12 @@ defmodule FinanceSmith.DataLake.KeyBuilderTest do
       key = "plaid_sync/hh-id/user-id/item_id/2026/03/timestamp.json"
       assert {:ok, "item_id"} = KeyBuilder.extract_plaid_item_id(key)
     end
+
+    test "returns :error for a legacy 3-segment key layout (pre-user_id)" do
+      # Keys written before caf4653 omit the user_id segment; they must be
+      # re-keyed before replay and must never silently match the parser.
+      legacy = "plaid_sync/hh-id/item_sandbox_abc123/2026/03/2026-03-15T14-30-45Z.json"
+      assert :error = KeyBuilder.extract_plaid_item_id(legacy)
+    end
   end
 end

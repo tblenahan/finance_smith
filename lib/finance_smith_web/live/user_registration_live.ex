@@ -34,12 +34,12 @@ defmodule FinanceSmithWeb.UserRegistrationLive do
         <.card_content>
           <%!-- Mode toggle --%>
           <div class="flex mb-6 border border-gray-800 rounded overflow-hidden">
-            <button
+            <.button
               type="button"
               phx-click="set_mode"
               phx-value-mode="create"
               class={[
-                "flex-1 py-2 font-mono text-[10px] uppercase tracking-widest transition-colors",
+                "flex-1 rounded-none border-0 py-2 font-mono text-[10px] uppercase tracking-widest transition-colors",
                 if(@mode == :create,
                   do: "bg-gray-800 text-gray-100",
                   else: "bg-gray-950 text-gray-500 hover:text-gray-300"
@@ -47,13 +47,13 @@ defmodule FinanceSmithWeb.UserRegistrationLive do
               ]}
             >
               Create Household
-            </button>
-            <button
+            </.button>
+            <.button
               type="button"
               phx-click="set_mode"
               phx-value-mode="join"
               class={[
-                "flex-1 py-2 font-mono text-[10px] uppercase tracking-widest transition-colors border-l border-gray-800",
+                "flex-1 rounded-none border-0 border-l border-gray-800 py-2 font-mono text-[10px] uppercase tracking-widest transition-colors",
                 if(@mode == :join,
                   do: "bg-gray-800 text-gray-100",
                   else: "bg-gray-950 text-gray-500 hover:text-gray-300"
@@ -61,7 +61,7 @@ defmodule FinanceSmithWeb.UserRegistrationLive do
               ]}
             >
               Join Existing
-            </button>
+            </.button>
           </div>
 
           <.form
@@ -180,6 +180,8 @@ defmodule FinanceSmithWeb.UserRegistrationLive do
         :create ->
           household_name = params["household_name"] || ""
 
+          # authorize?: false: unauthenticated registration path; policy bypass is
+          # declared on the :register action. Mirrors :sign_in.
           Identity.register(
             email,
             password,
@@ -191,6 +193,8 @@ defmodule FinanceSmithWeb.UserRegistrationLive do
           existing_member_email = params["existing_member_email"] || ""
           existing_member_password = params["existing_member_password"] || ""
 
+          # authorize?: false: unauthenticated registration path; policy bypass is
+          # declared on the :register_and_join action. Mirrors :register/:sign_in.
           Identity.register_and_join(
             email,
             password,
