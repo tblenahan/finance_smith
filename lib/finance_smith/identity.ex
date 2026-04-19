@@ -9,6 +9,11 @@ defmodule FinanceSmith.Identity do
 
     resource FinanceSmith.Identity.User do
       define :register, action: :register, args: [:email, :password]
+
+      define :register_and_join,
+        action: :register_and_join,
+        args: [:email, :password, :existing_member_email, :existing_member_password]
+
       define :sign_in, action: :sign_in, args: [:email, :password]
       define :generate_mfa_secret, action: :generate_mfa_secret
       define :enable_mfa, action: :enable_mfa, args: [:code]
