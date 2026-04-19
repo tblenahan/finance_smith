@@ -125,7 +125,7 @@ defmodule FinanceSmith.DataLake.B2.AuthServer do
 
       status ->
         Logger.error(
-          "[B2.AuthServer] Authorization failed. status=#{status} body=#{inspect(response.body)}"
+          "[B2.AuthServer] Authorization failed. status=#{status} code=#{inspect(response.body["code"])} message=#{inspect(response.body["message"])}"
         )
 
         {:error, {:b2_auth_failed, status, response.body}}

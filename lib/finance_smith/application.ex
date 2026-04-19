@@ -7,7 +7,7 @@ defmodule FinanceSmith.Application do
 
   @impl true
   def start(_type, _args) do
-    File.mkdir_p!("logs")
+    maybe_prepare_log_dir()
 
     children = [
       FinanceSmith.Repo,
@@ -24,5 +24,27 @@ defmodule FinanceSmith.Application do
 
   defp oban_config do
     Application.fetch_env!(:finance_smith, Oban)
+  end
+
+  defp maybe_prepare_log_dir do
+    if has_file_backend?() do
+      log_dir = Application.get_env(:finance_smith, :log_dir, "logs")
+
+      case File.mkdir_p(log_dir) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          require Logger
+          Logger.warning("Could not create log directory #{log_dir}: #{inspect(reason)}")
+      end
+    end
+  end
+
+  defp has_file_backend? do
+    Enum.any?(Application.get_env(:logger, :backends, []), fn
+      {LoggerFileBackend, _} -> true
+      _ -> false
+    end)
   end
 end

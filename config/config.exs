@@ -96,6 +96,15 @@ config :finance_smith, Oban,
   ],
   queues: [data_lake: 5]
 
+config :logger,
+  backends: [:console, {LoggerFileBackend, :error_log}]
+
+config :logger, :error_log,
+  level: :warning,
+  max_bytes: 10_000_000,
+  keep: 7,
+  metadata: [:request_id, :module]
+
 config :plaid,
   root_uri: "https://sandbox.plaid.com/",
   client_id: System.get_env("PLAID_CLIENT_ID"),
@@ -112,15 +121,5 @@ config :esbuild,
     cd: Path.expand("../assets", __DIR__),
     env: %{"NODE_PATH" => Path.expand("../deps", __DIR__)}
   ]
-
-config :logger,
-  backends: [:console, {LoggerFileBackend, :error_log}]
-
-config :logger, :error_log,
-  path: "logs/error.log",
-  level: :warning,
-  max_bytes: 10_000_000,
-  keep: 7,
-  metadata: [:request_id, :module]
 
 import_config "#{config_env()}.exs"
