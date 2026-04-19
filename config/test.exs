@@ -28,7 +28,7 @@ config :finance_smith, FinanceSmith.Repo,
 
 config :ash, policies: [show_policy_breakdowns?: true], disable_async?: true
 
-config :logger, backends: [:console]
+config :finance_smith, :enable_logger_file_backend, false
 
 # Manual mode: jobs are persisted but not executed automatically. This avoids
 # SyncWorker firing (real Plaid + B2) when LiveViews enqueue jobs from a process

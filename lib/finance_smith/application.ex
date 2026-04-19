@@ -7,6 +7,7 @@ defmodule FinanceSmith.Application do
 
   @impl true
   def start(_type, _args) do
+    maybe_add_logger_file_backend()
     maybe_prepare_log_dir()
 
     children = [
@@ -42,9 +43,22 @@ defmodule FinanceSmith.Application do
   end
 
   defp has_file_backend? do
-    Enum.any?(Application.get_env(:logger, :backends, []), fn
-      {LoggerFileBackend, _} -> true
-      _ -> false
-    end)
+    Application.get_env(:finance_smith, :enable_logger_file_backend, true)
+  end
+
+  defp maybe_add_logger_file_backend do
+    if has_file_backend?() do
+      case LoggerBackends.add({LoggerFileBackend, :error_log}) do
+        {:ok, _} ->
+          :ok
+
+        {:error, :already_present} ->
+          :ok
+
+        {:error, reason} ->
+          require Logger
+          Logger.warning("Could not start LoggerFileBackend :error_log: #{inspect(reason)}")
+      end
+    end
   end
 end
