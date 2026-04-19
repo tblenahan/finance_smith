@@ -92,7 +92,11 @@ config :finance_smith, Oban,
   repo: FinanceSmith.Repo,
   prefix: "machine",
   plugins: [
-    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7}
+    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
+    {Oban.Plugins.Cron,
+     crontab: [
+       {"*/30 * * * *", FinanceSmith.DataLake.SyncScheduler}
+     ]}
   ],
   queues: [data_lake: 5]
 
