@@ -37,14 +37,21 @@ defmodule FinanceSmith.Banking.Transaction do
   actions do
     defaults [:read, :destroy, create: :*, update: :*]
 
-    read :for_dashboard do
-      filter expr(account.plaid_item.user_id == ^actor(:id))
+    read :for_chart do
+      description "Returns lightweight transaction rows for chart rendering. No pagination — caller is responsible for scoping via arguments."
+
+      argument :date_from, :date, allow_nil?: true
+      argument :plaid_item_id, :uuid, allow_nil?: true
+      argument :user_id, :uuid, allow_nil?: true
 
       prepare build(
-                sort: [date: :desc, inserted_at: :desc],
-                limit: 50,
-                load: [:account]
+                select: [:date, :amount, :personal_finance_category],
+                sort: [date: :asc]
               )
+
+      filter expr(is_nil(^arg(:date_from)) or date >= ^arg(:date_from))
+      filter expr(is_nil(^arg(:plaid_item_id)) or account.plaid_item_id == ^arg(:plaid_item_id))
+      filter expr(is_nil(^arg(:user_id)) or account.plaid_item.user_id == ^arg(:user_id))
     end
 
     read :categories do
@@ -103,6 +110,8 @@ defmodule FinanceSmith.Banking.Transaction do
 
   policies do
     policy action_type(:read) do
+      # User.household_id is allow_nil?: false — every actor always has a
+      # household_id. The not-is_nil guard is kept for defensive clarity.
       authorize_if expr(
                      account.plaid_item.user_id == ^actor(:id) or
                        (not is_nil(^actor(:household_id)) and

@@ -25,6 +25,8 @@ defmodule FinanceSmith.Banking.Account do
 
   policies do
     policy action_type(:read) do
+      # User.household_id is allow_nil?: false — every actor always has a
+      # household_id. The not-is_nil guard is kept for defensive clarity.
       authorize_if expr(
                      plaid_item.user_id == ^actor(:id) or
                        (not is_nil(^actor(:household_id)) and

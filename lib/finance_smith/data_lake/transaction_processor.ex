@@ -17,7 +17,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   1. Build a lookup map of Plaid account ID -> internal account UUID.
   2. Run all DB operations inside a single Repo transaction:
-     - `added` / `modified` → upsert on `:unique_plaid_transaction_id`, collecting
+     - `added` / `modified` → upsert on `:unique_plaid_id`, collecting
        `Ash.Notifier.Notification` structs via `return_notifications?: true`
      - `removed` → bulk destroy by `plaid_transaction_id`
   3. After the transaction commits, flush the collected notifications via
@@ -123,7 +123,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
             |> Ash.Changeset.for_create(:create, attrs, authorize?: false)
             |> Ash.create!(
               upsert?: true,
-              upsert_identity: :unique_plaid_transaction_id,
+              upsert_identity: :unique_plaid_id,
               authorize?: false,
               return_notifications?: true
             )

@@ -2,7 +2,10 @@ defmodule FinanceSmith.Identity do
   use Ash.Domain
 
   resources do
-    resource FinanceSmith.Identity.Household
+    resource FinanceSmith.Identity.Household do
+      # Used by the dashboard to load household-level KPI aggregates.
+      define :get_household_with_kpis, action: :read, get_by: [:id]
+    end
 
     resource FinanceSmith.Identity.User do
       define :register, action: :register, args: [:email, :password]
@@ -12,6 +15,9 @@ defmodule FinanceSmith.Identity do
       define :verify_mfa_login, action: :verify_mfa_login, args: [:code]
       define :record_failed_login, action: :record_failed_login
       define :clear_auth_lockout, action: :clear_auth_lockout
+
+      # Used by the dashboard to load user-level KPI aggregates.
+      define :get_user_with_kpis, action: :read, get_by: [:id]
     end
   end
 

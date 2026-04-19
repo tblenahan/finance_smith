@@ -2,15 +2,12 @@ defmodule FinanceSmithWeb.DashboardLive do
   use FinanceSmithWeb, :live_view
 
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.Account
   alias FinanceSmith.Banking.PlaidCategories
-  alias FinanceSmith.Banking.PlaidItem
-  alias FinanceSmith.Banking.Transaction
+  alias FinanceSmith.Identity
   alias FinanceSmithWeb.MoneyFormat
   alias FinanceSmithWeb.TransactionLiveHelpers
   alias FinanceSmithWeb.TransactionTableComponent
 
-  require Ash.Query
   require Logger
 
   @timeframes ["1W", "1M", "3M", "6M", "9M", "1Y", "All"]
@@ -142,9 +139,15 @@ defmodule FinanceSmithWeb.DashboardLive do
     {:noreply, socket}
   end
 
-  def handle_event("change_view_scope", %{"scope" => scope}, socket)
-      when is_binary(scope) do
-    {:noreply, refresh_scope_data(socket, scope)}
+  def handle_event("change_view_scope", %{"scope" => raw_scope}, socket)
+      when is_binary(raw_scope) do
+    case validate_scope(raw_scope) do
+      {:ok, view_scope} ->
+        {:noreply, refresh_scope_data(socket, view_scope)}
+
+      :error ->
+        {:noreply, put_flash(socket, :error, "We have a... discrepancy. The scope is invalid.")}
+    end
   end
 
   def handle_info(%Phoenix.Socket.Broadcast{event: "complete_sync"}, socket) do
@@ -273,30 +276,14 @@ defmodule FinanceSmithWeb.DashboardLive do
           <div class="flex flex-wrap items-center gap-3">
             <%!-- Scope selector --%>
             <form phx-change="change_view_scope" class="flex items-center">
-              <select
+              <.input
+                type="select"
                 name="scope"
+                id="view-scope-select"
+                value={@view_scope}
+                options={scope_options(@current_user, @plaid_items)}
                 class="bg-gray-900 border border-gray-800 rounded text-gray-400 font-mono text-[10px] uppercase tracking-wider px-2 py-1.5 focus:outline-none focus:border-gray-600 cursor-pointer"
-              >
-                <%= if @current_user.household_id do %>
-                  <option value="scope_household" selected={@view_scope == "scope_household"}>
-                    Household
-                  </option>
-                <% end %>
-                <option value="scope_personal" selected={@view_scope == "scope_personal"}>
-                  Personal
-                </option>
-                <%= if @plaid_items != [] do %>
-                  <option disabled>─────────</option>
-                  <%= for item <- @plaid_items do %>
-                    <option
-                      value={"plaid_item:#{item.id}"}
-                      selected={@view_scope == "plaid_item:#{item.id}"}
-                    >
-                      {item.institution_name || "Unknown Institution"}
-                    </option>
-                  <% end %>
-                <% end %>
-              </select>
+              />
             </form>
 
             <%!-- Timeframe tabs --%>
@@ -347,6 +334,8 @@ defmodule FinanceSmithWeb.DashboardLive do
 
           <div
             id="resizer"
+            role="separator"
+            aria-label="Resize panels"
             class="w-4 cursor-col-resize bg-gray-800 hover:bg-gray-700 flex-shrink-0 transition-colors z-10 mx-1 rounded"
           >
           </div>
@@ -402,8 +391,9 @@ defmodule FinanceSmithWeb.DashboardLive do
     plaid_env =
       if Application.get_env(:plaid, :root_uri) =~ "sandbox", do: "sandbox", else: "production"
 
-    Logger.debug(
-      "[DashboardLive] Plaid link token request — env=#{plaid_env} redirect_uri=#{redirect_uri}"
+    Logger.debug("[DashboardLive] Plaid link token requested",
+      plaid_env: plaid_env,
+      redirect_uri: redirect_uri
     )
 
     params = %{
@@ -435,113 +425,120 @@ defmodule FinanceSmithWeb.DashboardLive do
   defp parse_scope("plaid_item:" <> id), do: {:plaid_item, id}
   defp parse_scope(_), do: :personal
 
+  # Validates a raw scope string from the client. Returns {:ok, scope} or :error.
+  # UUIDs in "plaid_item:<id>" are validated to prevent type-cast errors downstream.
+  defp validate_scope("scope_household"), do: {:ok, "scope_household"}
+  defp validate_scope("scope_personal"), do: {:ok, "scope_personal"}
+
+  defp validate_scope("plaid_item:" <> id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, _} -> {:ok, "plaid_item:#{id}"}
+      :error -> :error
+    end
+  end
+
+  defp validate_scope(_), do: :error
+
   # Returns a map merged into the Transaction :list / :categories action args.
   defp scope_filters(:household, _user), do: %{}
   defp scope_filters(:personal, user), do: %{user_id: user.id}
   defp scope_filters({:plaid_item, id}, _user), do: %{plaid_item_id: id}
 
-  # Polymorphic — pattern-matches on query.resource so the same helper works
-  # for Transaction, Account, and PlaidItem ad-hoc queries.
-  defp apply_scope(query, :household, _user), do: query
+  # Builds the options list for the scope <.input type="select">.
+  # Groups scopes with optgroups: top-level scope first, then institutions.
+  defp scope_options(user, plaid_items) do
+    scope_group =
+      if user.household_id do
+        [{"Household", "scope_household"}, {"Personal", "scope_personal"}]
+      else
+        [{"Personal", "scope_personal"}]
+      end
 
-  defp apply_scope(%{resource: Transaction} = q, :personal, user) do
-    uid = user.id
-    Ash.Query.filter(q, account.plaid_item.user_id == ^uid)
-  end
+    if plaid_items == [] do
+      scope_group
+    else
+      institution_group =
+        Enum.map(plaid_items, fn item ->
+          {item.institution_name || "Unknown Institution", "plaid_item:#{item.id}"}
+        end)
 
-  defp apply_scope(%{resource: Transaction} = q, {:plaid_item, id}, _user) do
-    Ash.Query.filter(q, account.plaid_item_id == ^id)
-  end
-
-  defp apply_scope(%{resource: Account} = q, :personal, user) do
-    uid = user.id
-    Ash.Query.filter(q, plaid_item.user_id == ^uid)
-  end
-
-  defp apply_scope(%{resource: Account} = q, {:plaid_item, id}, _user) do
-    Ash.Query.filter(q, plaid_item_id == ^id)
-  end
-
-  defp apply_scope(%{resource: PlaidItem} = q, :personal, user) do
-    uid = user.id
-    Ash.Query.filter(q, user_id == ^uid)
-  end
-
-  defp apply_scope(%{resource: PlaidItem} = q, {:plaid_item, id}, _user) do
-    Ash.Query.filter(q, id == ^id)
+      [{"Scope", scope_group}, {"Institution", institution_group}]
+    end
   end
 
   # --- Scoped KPIs -------------------------------------------------------
 
   defp load_active_plaid_items(user) do
-    uid = user.id
-
-    PlaidItem
-    |> Ash.Query.filter(status == :active and user_id == ^uid)
-    |> Ash.Query.select([:id, :institution_name])
-    |> Ash.Query.sort(institution_name: :asc)
-    |> Ash.read!(actor: user)
+    # Returns all active PlaidItems the actor can see: own items + household
+    # members' items (policy handles scoping automatically).
+    Banking.list_active_plaid_items!(actor: user)
   end
 
-  defp fetch_scoped_kpis(scope, user) do
-    thirty_days_ago = Date.add(Date.utc_today(), -30)
-
-    # Net worth — sum assets and subtract liabilities
-    account_rows =
-      Account
-      |> Ash.Query.select([:type, :current_balance])
-      |> apply_scope(scope, user)
-      |> Ash.read!(actor: user)
-
-    {assets, liabilities} =
-      Enum.reduce(account_rows, {0, 0}, fn %{type: type, current_balance: bal}, {a, l} ->
-        bal = bal || 0
-
-        if type in ["depository", "investment"],
-          do: {a + bal, l},
-          else: {a, l + bal}
-      end)
-
-    # 30-day cashflow — Plaid sign convention: positive = outflow, negative = inflow
-    tx_rows =
-      Transaction
-      |> Ash.Query.select([:amount])
-      |> Ash.Query.filter(date >= ^thirty_days_ago)
-      |> apply_scope(scope, user)
-      |> Ash.read!(actor: user)
-
-    {outflow_30d, inflow_30d} =
-      Enum.reduce(tx_rows, {0, 0}, fn %{amount: amt}, {out, inf} ->
-        cond do
-          is_nil(amt) -> {out, inf}
-          amt > 0 -> {out + amt, inf}
-          amt < 0 -> {out, inf + amt}
-          true -> {out, inf}
-        end
-      end)
-
-    # Active streams — for a single plaid_item scope, count accounts instead
-    {streams_count, streams_label} =
-      case scope do
-        {:plaid_item, pid} ->
-          q = Account |> Ash.Query.filter(status == :active and plaid_item_id == ^pid)
-          {Ash.count!(q, actor: user), "Active Accounts"}
-
-        _ ->
-          q =
-            PlaidItem
-            |> Ash.Query.filter(status == :active)
-            |> apply_scope(scope, user)
-
-          {Ash.count!(q, actor: user), "Active Data Streams"}
-      end
+  # Fetches KPIs using Postgres aggregates rather than loading rows into the
+  # BEAM and reducing in Elixir.
+  defp fetch_scoped_kpis(:personal, user) do
+    u =
+      Identity.get_user_with_kpis!(user.id,
+        load: [
+          :total_assets,
+          :total_liabilities,
+          :outflow_30d,
+          :inflow_30d,
+          :active_streams_count
+        ],
+        actor: user
+      )
 
     %{
-      scope_net_worth: assets - liabilities,
-      scope_outflow_30d: outflow_30d,
-      scope_inflow_30d: inflow_30d,
-      scope_streams_count: streams_count,
-      scope_streams_label: streams_label
+      scope_net_worth: u.total_assets - u.total_liabilities,
+      scope_outflow_30d: u.outflow_30d,
+      scope_inflow_30d: u.inflow_30d,
+      scope_streams_count: u.active_streams_count,
+      scope_streams_label: "Active Data Streams"
+    }
+  end
+
+  defp fetch_scoped_kpis(:household, user) do
+    h =
+      Identity.get_household_with_kpis!(user.household_id,
+        load: [
+          :total_assets,
+          :total_liabilities,
+          :outflow_30d,
+          :inflow_30d,
+          :active_streams_count
+        ],
+        authorize?: false
+      )
+
+    %{
+      scope_net_worth: h.total_assets - h.total_liabilities,
+      scope_outflow_30d: h.outflow_30d,
+      scope_inflow_30d: h.inflow_30d,
+      scope_streams_count: h.active_streams_count,
+      scope_streams_label: "Active Data Streams"
+    }
+  end
+
+  defp fetch_scoped_kpis({:plaid_item, id}, user) do
+    item =
+      Banking.get_plaid_item_kpis!(id,
+        load: [
+          :kpi_assets,
+          :kpi_liabilities,
+          :kpi_outflow_30d,
+          :kpi_inflow_30d,
+          :kpi_active_accounts_count
+        ],
+        actor: user
+      )
+
+    %{
+      scope_net_worth: item.kpi_assets - item.kpi_liabilities,
+      scope_outflow_30d: item.kpi_outflow_30d,
+      scope_inflow_30d: item.kpi_inflow_30d,
+      scope_streams_count: item.kpi_active_accounts_count,
+      scope_streams_label: "Active Accounts"
     }
   end
 
@@ -579,29 +576,22 @@ defmodule FinanceSmithWeb.DashboardLive do
     end
   end
 
-  defp fetch_financial_data(timeframe, %{} = user, scope) do
+  defp fetch_financial_data(timeframe, user, scope) do
     start_date = start_date_for(timeframe)
     today = Date.utc_today()
 
-    query =
-      Transaction
-      |> Ash.Query.select([:date, :amount, :personal_finance_category])
+    chart_filters = scope_filters(scope, user) |> Map.put(:date_from, start_date)
 
-    query =
-      if start_date do
-        Ash.Query.filter(query, date >= ^start_date)
-      else
-        query
-      end
+    rows = Banking.list_transactions_for_chart!(chart_filters, actor: user)
 
-    query = apply_scope(query, scope, user)
-
-    rows = Ash.read!(query, actor: user)
-
-    %{
-      cashflow: build_cashflow_series(rows, start_date || earliest_date(rows, today), today),
-      categories: build_outflow_categories(rows)
-    }
+    if rows == [] do
+      :empty
+    else
+      %{
+        cashflow: build_cashflow_series(rows, start_date || earliest_date(rows, today), today),
+        categories: build_outflow_categories(rows)
+      }
+    end
   end
 
   defp earliest_date([], today), do: today
@@ -723,7 +713,8 @@ defmodule FinanceSmithWeb.DashboardLive do
 
   defp format_plaid_category("RENT_AND_UTILITIES"), do: "Util."
 
-  # Catch-all for new Plaid categories: format and strictly truncate to 7 characters
+  # Catch-all for new Plaid PFC v2 primaries. Truncated to 7 chars to fit pie
+  # slice labels without wrapping.
   defp format_plaid_category(other) when is_binary(other) do
     other
     |> String.split("_")
@@ -735,86 +726,89 @@ defmodule FinanceSmithWeb.DashboardLive do
   defp format_plaid_category(nil), do: "Misc."
 
   defp push_chart_data(socket, timeframe, scope) do
-    %{
-      cashflow: %{labels: labels, inflow: inflow, outflow: outflow},
-      categories: pie_data
-    } = fetch_financial_data(timeframe, socket.assigns.current_user, scope)
+    case fetch_financial_data(timeframe, socket.assigns.current_user, scope) do
+      :empty ->
+        socket
+        |> push_event("update-chart-cashflow-line-chart", %{empty: true})
+        |> push_event("update-chart-outflow-pie-chart", %{empty: true})
 
-    line_config = %{
-      tooltip: %{
-        trigger: "axis",
-        backgroundColor: "#030712",
-        borderColor: "#1f2937",
-        textStyle: %{color: "#e5e7eb", fontFamily: "monospace"}
-      },
-      legend: %{
-        data: ["Inflow", "Outflow"],
-        textStyle: %{color: "#9ca3af", fontFamily: "monospace"},
-        top: 4
-      },
-      grid: %{containLabel: true, left: 8, right: 16, top: 36, bottom: 24},
-      xAxis: %{
-        type: "category",
-        data: labels,
-        axisLine: %{lineStyle: %{color: "#374151"}},
-        axisLabel: %{color: "#6b7280", fontFamily: "monospace"}
-      },
-      yAxis: %{
-        type: "value",
-        axisLabel: %{formatter: "${value}", color: "#6b7280", fontFamily: "monospace"},
-        splitLine: %{lineStyle: %{color: "#1f2937"}}
-      },
-      series: [
-        %{
-          name: "Inflow",
-          type: "line",
-          smooth: true,
-          data: inflow,
-          lineStyle: %{color: "#10b981"},
-          itemStyle: %{color: "#10b981"},
-          areaStyle: %{color: "rgba(16,185,129,0.12)"}
-        },
-        %{
-          name: "Outflow",
-          type: "line",
-          smooth: true,
-          data: outflow,
-          lineStyle: %{color: "#f59e0b"},
-          itemStyle: %{color: "#f59e0b"},
-          areaStyle: %{color: "rgba(245,158,11,0.10)"}
-        }
-      ]
-    }
-
-    pie_config = %{
-      tooltip: %{
-        trigger: "item",
-        backgroundColor: "#030712",
-        borderColor: "#1f2937",
-        textStyle: %{color: "#e5e7eb", fontFamily: "monospace"}
-      },
-      series: [
-        %{
-          name: "Outflow",
-          type: "pie",
-          radius: ["35%", "60%"],
-          center: ["40%", "50%"],
-          avoidLabelOverlap: true,
-          itemStyle: %{borderColor: "#030712", borderWidth: 2},
-          label: %{
-            show: true,
-            formatter: "{b}",
-            color: "#9ca3af",
-            fontFamily: "monospace"
+      %{cashflow: %{labels: labels, inflow: inflow, outflow: outflow}, categories: pie_data} ->
+        line_config = %{
+          tooltip: %{
+            trigger: "axis",
+            backgroundColor: "#030712",
+            borderColor: "#1f2937",
+            textStyle: %{color: "#e5e7eb", fontFamily: "monospace"}
           },
-          data: pie_data,
-          color: ["#10b981", "#f59e0b", "#3b82f6", "#a855f7", "#ef4444", "#6b7280"]
+          legend: %{
+            data: ["Inflow", "Outflow"],
+            textStyle: %{color: "#9ca3af", fontFamily: "monospace"},
+            top: 4
+          },
+          grid: %{containLabel: true, left: 8, right: 16, top: 36, bottom: 24},
+          xAxis: %{
+            type: "category",
+            data: labels,
+            axisLine: %{lineStyle: %{color: "#374151"}},
+            axisLabel: %{color: "#6b7280", fontFamily: "monospace"}
+          },
+          yAxis: %{
+            type: "value",
+            axisLabel: %{formatter: "${value}", color: "#6b7280", fontFamily: "monospace"},
+            splitLine: %{lineStyle: %{color: "#1f2937"}}
+          },
+          series: [
+            %{
+              name: "Inflow",
+              type: "line",
+              smooth: true,
+              data: inflow,
+              lineStyle: %{color: "#10b981"},
+              itemStyle: %{color: "#10b981"},
+              areaStyle: %{color: "rgba(16,185,129,0.12)"}
+            },
+            %{
+              name: "Outflow",
+              type: "line",
+              smooth: true,
+              data: outflow,
+              lineStyle: %{color: "#f59e0b"},
+              itemStyle: %{color: "#f59e0b"},
+              areaStyle: %{color: "rgba(245,158,11,0.10)"}
+            }
+          ]
         }
-      ]
-    }
 
-    socket
-    |> push_event("update-chart-cashflow-line-chart", line_config)
-    |> push_event("update-chart-outflow-pie-chart", pie_config)
+        pie_config = %{
+          tooltip: %{
+            trigger: "item",
+            backgroundColor: "#030712",
+            borderColor: "#1f2937",
+            textStyle: %{color: "#e5e7eb", fontFamily: "monospace"}
+          },
+          series: [
+            %{
+              name: "Outflow",
+              type: "pie",
+              radius: ["35%", "60%"],
+              center: ["40%", "50%"],
+              avoidLabelOverlap: true,
+              itemStyle: %{borderColor: "#030712", borderWidth: 2},
+              label: %{
+                show: true,
+                formatter: "{b}",
+                color: "#9ca3af",
+                fontFamily: "monospace"
+              },
+              data: pie_data,
+              color: ["#10b981", "#f59e0b", "#3b82f6", "#a855f7", "#ef4444", "#6b7280"]
+            }
+          ]
+        }
+
+        socket
+        |> push_event("update-chart-cashflow-line-chart", line_config)
+        |> push_event("update-chart-outflow-pie-chart", pie_config)
+    end
   end
 end

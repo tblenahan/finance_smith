@@ -21,6 +21,25 @@ const ChartHook = {
     this._resizeObserver.observe(this.el);
 
     this.handleEvent("update-chart-" + this.el.id, (opts) => {
+      // Empty-state signal from the server — render an Agent Smith message
+      // instead of a chart with a single degenerate data point.
+      if (opts.empty) {
+        this.chart.clear();
+        this.chart.setOption({
+          graphic: [{
+            type: "text",
+            left: "center",
+            top: "middle",
+            style: {
+              text: "There is no data here. Only an anomaly.",
+              fill: "#4b5563",
+              font: "12px monospace",
+            },
+          }],
+        });
+        return;
+      }
+
       // Pie chart: slice labels stay short (`name`); hover uses `readable_name` from the server
       // (Plaid snake_case → readable text). String tooltip formatters cannot be pushed from LV.
       if (this.el.id === "outflow-pie-chart") {
