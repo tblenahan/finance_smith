@@ -55,6 +55,16 @@ defmodule FinanceSmith.Banking.PlaidItem do
               )
     end
 
+    read :list_active do
+      description "Returns all active PlaidItems the actor may read, sorted by institution name."
+
+      prepare build(
+                filter: [status: :active],
+                select: [:id, :institution_name],
+                sort: [institution_name: :asc]
+              )
+    end
+
     update :complete_sync do
       accept []
       change set_attribute(:last_synced_at, &DateTime.utc_now/0)
@@ -63,7 +73,13 @@ defmodule FinanceSmith.Banking.PlaidItem do
 
   policies do
     policy action_type(:read) do
-      authorize_if expr(user_id == ^actor(:id))
+      # User.household_id is allow_nil?: false — every actor always has a
+      # household_id. The not-is_nil guard is kept for defensive clarity.
+      authorize_if expr(
+                     user_id == ^actor(:id) or
+                       (not is_nil(^actor(:household_id)) and
+                          user.household_id == ^actor(:household_id))
+                   )
     end
 
     # User-facing create: any authenticated actor may call this action.
@@ -129,6 +145,33 @@ defmodule FinanceSmith.Banking.PlaidItem do
     end
 
     has_many :accounts, FinanceSmith.Banking.Account
+  end
+
+  aggregates do
+    sum :kpi_assets, [:accounts], :current_balance do
+      filter expr(type not in ["credit", "loan"])
+      default 0
+    end
+
+    sum :kpi_liabilities, [:accounts], :current_balance do
+      filter expr(type in ["credit", "loan"])
+      default 0
+    end
+
+    sum :kpi_outflow_30d, [:accounts, :transactions], :amount do
+      filter expr(amount > 0 and date >= ago(30, :day))
+      default 0
+    end
+
+    sum :kpi_inflow_30d, [:accounts, :transactions], :amount do
+      filter expr(amount < 0 and date >= ago(30, :day))
+      default 0
+    end
+
+    count :kpi_active_accounts_count, :accounts do
+      filter expr(status == :active)
+      default 0
+    end
   end
 
   identities do

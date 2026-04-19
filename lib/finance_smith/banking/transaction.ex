@@ -24,25 +24,49 @@ defmodule FinanceSmith.Banking.Transaction do
       index [:metadata], using: "GIN", name: "transactions_metadata_gin_index"
 
       index [:date, :amount], name: "transactions_date_amount_index"
+
+      index [:account_id, :personal_finance_category],
+        name: "transactions_account_id_category_index"
+
+      index [:account_id, :personal_finance_category],
+        where: "amount > 0",
+        name: "transactions_outflow_by_account_category_index"
     end
   end
 
   actions do
     defaults [:read, :destroy, create: :*, update: :*]
 
-    read :for_dashboard do
-      filter expr(account.plaid_item.user_id == ^actor(:id))
+    read :for_chart do
+      description """
+      Returns lightweight transaction rows for chart rendering. No pagination —
+      caller is responsible for scoping via arguments.
+
+      `date_from` is optional. When omitted (the \"All\" timeframe), the query
+      returns all transactions in scope up to the hard row cap of 10,000, sorted
+      oldest-first. The chart then spans from the earliest returned transaction
+      date to today, giving a view of the full transaction history within the cap.
+      """
+
+      argument :date_from, :date, allow_nil?: true
+      argument :plaid_item_id, :uuid, allow_nil?: true
+      argument :user_id, :uuid, allow_nil?: true
 
       prepare build(
-                sort: [date: :desc, inserted_at: :desc],
-                limit: 50,
-                load: [:account]
+                select: [:date, :amount, :personal_finance_category],
+                sort: [date: :asc],
+                limit: 10_000
               )
+
+      filter expr(is_nil(^arg(:date_from)) or date >= ^arg(:date_from))
+      filter expr(is_nil(^arg(:plaid_item_id)) or account.plaid_item_id == ^arg(:plaid_item_id))
+      filter expr(is_nil(^arg(:user_id)) or account.plaid_item.user_id == ^arg(:user_id))
     end
 
     read :categories do
       argument :account_id, :uuid, allow_nil?: true
       argument :plaid_item_id, :uuid, allow_nil?: true
+      argument :user_id, :uuid, allow_nil?: true
 
       prepare build(
                 select: [:personal_finance_category],
@@ -52,13 +76,14 @@ defmodule FinanceSmith.Banking.Transaction do
 
       filter expr(not is_nil(personal_finance_category))
       filter expr(is_nil(^arg(:account_id)) or account_id == ^arg(:account_id))
-
       filter expr(is_nil(^arg(:plaid_item_id)) or account.plaid_item_id == ^arg(:plaid_item_id))
+      filter expr(is_nil(^arg(:user_id)) or account.plaid_item.user_id == ^arg(:user_id))
     end
 
     read :list do
       argument :account_id, :uuid, allow_nil?: true
       argument :plaid_item_id, :uuid, allow_nil?: true
+      argument :user_id, :uuid, allow_nil?: true
       argument :date_from, :date, allow_nil?: true
       argument :date_to, :date, allow_nil?: true
       argument :category, :string, allow_nil?: true
@@ -76,8 +101,8 @@ defmodule FinanceSmith.Banking.Transaction do
               )
 
       filter expr(is_nil(^arg(:account_id)) or account_id == ^arg(:account_id))
-
       filter expr(is_nil(^arg(:plaid_item_id)) or account.plaid_item_id == ^arg(:plaid_item_id))
+      filter expr(is_nil(^arg(:user_id)) or account.plaid_item.user_id == ^arg(:user_id))
 
       filter expr(is_nil(^arg(:date_from)) or date >= ^arg(:date_from))
 
@@ -94,7 +119,13 @@ defmodule FinanceSmith.Banking.Transaction do
 
   policies do
     policy action_type(:read) do
-      authorize_if expr(account.plaid_item.user_id == ^actor(:id))
+      # User.household_id is allow_nil?: false — every actor always has a
+      # household_id. The not-is_nil guard is kept for defensive clarity.
+      authorize_if expr(
+                     account.plaid_item.user_id == ^actor(:id) or
+                       (not is_nil(^actor(:household_id)) and
+                          account.plaid_item.user.household_id == ^actor(:household_id))
+                   )
     end
 
     # Writes are system-only. TransactionProcessor / SyncWorker call with
@@ -156,6 +187,6 @@ defmodule FinanceSmith.Banking.Transaction do
   end
 
   identities do
-    identity :unique_plaid_transaction_id, [:plaid_transaction_id, :date]
+    identity :unique_plaid_id, [:plaid_transaction_id]
   end
 end
