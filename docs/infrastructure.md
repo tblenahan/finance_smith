@@ -291,6 +291,6 @@ The codebase evolves; the following are **not** fully implemented or not present
 - **Plaid webhooks** — no verified webhook endpoint in the router; sync is **on-demand** (Oban) or user-initiated via Plaid Link.
 - **Rich dashboard product** — filtering/grouping by institution, account type, and time grain as described in the README is **not** yet realized; the current dashboard shows a recent-transactions table (last 50) without filtering or aggregation.
 - **B2 purge on `PlaidItem` delete** — database cascades exist; **object-store** cleanup under `plaid_sync/...` is not automated.
-- **Banking authorization policies** — `PlaidItem`, `Account`, and `Transaction` do not yet use `Ash.Policy.Authorizer`; background jobs and some internal paths use `authorize?: false`.
+- **Banking authorization policies** — `PlaidItem`, `Account`, and `Transaction` now declare `Ash.Policy.Authorizer` and household-scoped policies (see [AGENT_SECURITY.md §Authorization posture](../AGENT_SECURITY.md)). Background jobs and some internal paths still call these resources with `authorize?: false` where the action runs without an actor; every such call site is expected to document why in an adjacent comment.
 
 If you implement any of the above, update this document and [SECURITY.md](../SECURITY.md) / [AGENT_SECURITY.md](../AGENT_SECURITY.md) when security posture changes.

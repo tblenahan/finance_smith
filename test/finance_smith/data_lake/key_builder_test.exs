@@ -92,5 +92,27 @@ defmodule FinanceSmith.DataLake.KeyBuilderTest do
       legacy = "plaid_sync/hh-id/item_sandbox_abc123/2026/03/2026-03-15T14-30-45Z.json"
       assert :error = KeyBuilder.extract_plaid_item_id(legacy)
     end
+
+    test "returns :error when the year segment is not 4 characters long" do
+      short_year = "plaid_sync/hh-id/user-id/item_id/202/03/ts.json"
+      long_year = "plaid_sync/hh-id/user-id/item_id/20266/03/ts.json"
+      assert :error = KeyBuilder.extract_plaid_item_id(short_year)
+      assert :error = KeyBuilder.extract_plaid_item_id(long_year)
+    end
+
+    test "returns :error when the year segment is not numeric" do
+      # Must reject keys where the 4-char slot happens to be alpha, to prevent a
+      # legacy layout whose 4th segment is a 4-char non-numeric string from being
+      # silently misparsed as "{item_id, year}".
+      assert :error =
+               KeyBuilder.extract_plaid_item_id(
+                 "plaid_sync/hh-id/user-id/item_id/YEAR/03/ts.json"
+               )
+
+      assert :error =
+               KeyBuilder.extract_plaid_item_id(
+                 "plaid_sync/hh-id/user-id/item_id/20a6/03/ts.json"
+               )
+    end
   end
 end

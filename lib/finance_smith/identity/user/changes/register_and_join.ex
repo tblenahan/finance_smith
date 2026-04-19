@@ -6,6 +6,10 @@ defmodule FinanceSmith.Identity.User.Changes.RegisterAndJoin do
   This change deliberately does NOT route through `verify_sign_in/2` so that
   a form typo does not increment the existing member's lockout counter.
   Bcrypt primitives are used directly, matching the same verification logic.
+
+  A sponsor whose account is currently locked (`locked_until` in the future)
+  cannot authorize a join. The error is the same generic "Invalid credentials."
+  as a wrong password to avoid leaking lockout state to unauthenticated callers.
   """
   use Ash.Resource.Change
 
@@ -19,25 +23,36 @@ defmodule FinanceSmith.Identity.User.Changes.RegisterAndJoin do
 
       case look_up_existing_member(existing_email) do
         {:ok, existing_user} ->
-          if Bcrypt.verify_pass(existing_password, existing_user.password_hash) do
-            hash_and_join(cs, existing_user)
-          else
-            Ash.Changeset.add_error(cs,
-              field: :existing_member_password,
-              message: "Invalid credentials."
-            )
+          cond do
+            locked_out?(existing_user) ->
+              add_invalid_credentials_error(cs)
+
+            Bcrypt.verify_pass(existing_password, existing_user.password_hash) ->
+              hash_and_join(cs, existing_user)
+
+            true ->
+              add_invalid_credentials_error(cs)
           end
 
         :not_found ->
           # Constant-time guard — do not reveal whether the email exists.
           Bcrypt.no_user_verify()
-
-          Ash.Changeset.add_error(cs,
-            field: :existing_member_password,
-            message: "Invalid credentials."
-          )
+          add_invalid_credentials_error(cs)
       end
     end)
+  end
+
+  defp locked_out?(%{locked_until: nil}), do: false
+
+  defp locked_out?(%{locked_until: %DateTime{} = locked_until}) do
+    DateTime.compare(locked_until, DateTime.utc_now()) == :gt
+  end
+
+  defp add_invalid_credentials_error(cs) do
+    Ash.Changeset.add_error(cs,
+      field: :existing_member_password,
+      message: "Invalid credentials."
+    )
   end
 
   defp look_up_existing_member(email) do

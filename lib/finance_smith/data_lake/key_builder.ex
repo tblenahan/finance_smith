@@ -53,11 +53,17 @@ defmodule FinanceSmith.DataLake.KeyBuilder do
   def extract_plaid_item_id(object_key) do
     case String.split(object_key, "/") do
       ["plaid_sync", _household_id, _user_id, plaid_item_id, year | _rest]
-      when plaid_item_id != "" and byte_size(year) == 4 ->
-        {:ok, plaid_item_id}
+      when plaid_item_id != "" ->
+        if numeric_year?(year), do: {:ok, plaid_item_id}, else: :error
 
       _ ->
         :error
     end
   end
+
+  defp numeric_year?(<<a, b, c, d>>)
+       when a in ?0..?9 and b in ?0..?9 and c in ?0..?9 and d in ?0..?9,
+       do: true
+
+  defp numeric_year?(_), do: false
 end

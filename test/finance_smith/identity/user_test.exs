@@ -208,6 +208,50 @@ defmodule FinanceSmith.Identity.UserTest do
       # unauthenticated registration.
       assert Ash.can?({FinanceSmith.Identity.User, :register_and_join}, nil)
     end
+
+    defp set_locked_until!(user, locked_until) do
+      user
+      |> Ash.Changeset.for_update(:update, %{})
+      |> Ash.Changeset.force_change_attribute(:locked_until, locked_until)
+      |> Ash.update!(authorize?: false)
+    end
+
+    test "rejects a join when the sponsor is currently locked out" do
+      %{user: existing, email: existing_email} = register_existing!()
+
+      future_lock = DateTime.add(DateTime.utc_now(), 15 * 60, :second)
+      locked = set_locked_until!(existing, future_lock)
+      assert locked.locked_until == future_lock
+
+      assert {:error, %Ash.Error.Invalid{} = error} =
+               Identity.register_and_join(
+                 unique_email(),
+                 "SecurePass99!",
+                 existing_email,
+                 @existing_password,
+                 authorize?: false
+               )
+
+      # Message is intentionally identical to a wrong-password rejection so
+      # lockout state cannot be inferred by an unauthenticated caller.
+      assert Exception.message(error) =~ "Invalid credentials"
+    end
+
+    test "accepts a join once the sponsor's lockout has elapsed" do
+      %{user: existing, email: existing_email} = register_existing!()
+
+      past_lock = DateTime.add(DateTime.utc_now(), -60, :second)
+      set_locked_until!(existing, past_lock)
+
+      assert {:ok, _new_user} =
+               Identity.register_and_join(
+                 unique_email(),
+                 "SecurePass99!",
+                 existing_email,
+                 @existing_password,
+                 authorize?: false
+               )
+    end
   end
 
   # ---------------------------------------------------------------------------

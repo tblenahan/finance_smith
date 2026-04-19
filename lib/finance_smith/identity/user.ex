@@ -69,6 +69,7 @@ defmodule FinanceSmith.Identity.User do
 
       argument :password, :string do
         allow_nil? false
+        sensitive? true
       end
 
       prepare build(limit: 1)
