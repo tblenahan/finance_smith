@@ -1,6 +1,10 @@
 defmodule FinanceSmithWeb.ErrorHTML do
   use FinanceSmithWeb, :html
 
+  def render(template, _assigns) do
+    Phoenix.Controller.status_message_from_template(template)
+  end
+
   def html(assigns) do
     ~H"""
     <!DOCTYPE html>
