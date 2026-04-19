@@ -14,7 +14,7 @@ defmodule FinanceSmith.Identity.User.Changes.Register do
     Ash.Changeset.before_action(changeset, fn cs ->
       password = Ash.Changeset.get_argument(cs, :password)
       hashed = Bcrypt.hash_pwd_salt(password)
-      cs = Ash.Changeset.change_attribute(cs, :password_hash, hashed)
+      cs = Ash.Changeset.force_change_attribute(cs, :password_hash, hashed)
 
       household_result =
         FinanceSmith.Identity.Household
