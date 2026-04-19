@@ -62,6 +62,7 @@ defmodule FinanceSmith.MixProject do
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 0.24"},
+      {:logger_file_backend, "~> 0.0.13"},
       {:esbuild, "~> 0.8", runtime: Mix.env() == :dev}
     ]
   end
