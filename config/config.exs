@@ -41,7 +41,7 @@ config :finance_smith,
 config :finance_smith, FinanceSmithWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,
   url: [host: "localhost", path: "/", port: 4000],
-  render_errors: [formats: [html: {FinanceSmithWeb.ErrorHTML, :html}]],
+  render_errors: [formats: [html: FinanceSmithWeb.ErrorHTML]],
   pubsub_server: FinanceSmith.PubSub,
   live_view: [signing_salt: "finance_smith_live_view"]
 
