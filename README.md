@@ -53,6 +53,17 @@ docker compose up -d
 This starts a PostgreSQL 17 container. The test database (`finance_smith_test`) is
 created automatically by `docker/scripts/init-test-db.sh` on the first run.
 
+> **Production / containerized deployment:** To run the full application stack (database
+> + Phoenix app) in Docker, see the SOPS-based workflow in
+> [docs/infrastructure.md — Container deployment with SOPS](docs/infrastructure.md). The
+> short version: encrypt your secrets into `secrets.enc.env`, run `bin/docker-build.sh`,
+> then `docker compose up -d`. Migrations run automatically on boot via
+> `FinanceSmith.Release.migrate/0`.
+>
+> **Desktop / native packaging** is a future goal. See
+> [docs/desktop-spikes.md](docs/desktop-spikes.md) for the environment contract that any
+> future packaging approach must satisfy.
+
 **3. Create the database schema and run migrations**
 
 ```bash

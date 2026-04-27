@@ -1,0 +1,39 @@
+# Build artefacts — not needed in the image (mix release produces a self-contained tree)
+/_build/
+/deps/
+/cover/
+/tmp/
+erl_crash.dump
+
+# Frontend build outputs (rebuilt inside the image)
+/priv/static/assets/
+/assets/node_modules/
+
+# Logs (runtime artefact, not source)
+/logs/
+
+# Git metadata
+/.git/
+/.github/
+/.githooks/
+
+# Secrets — the host .env and the raw age key must NEVER enter the image.
+# secrets.enc.env is intentionally NOT listed here; the Dockerfile COPYs it in.
+.env
+.env.*
+age.key
+secrets.dec.env
+
+# Compose overrides (local-only, not relevant to the image build)
+compose.override.yaml
+
+# Editor / IDE state
+.vscode/
+.elixir_ls/
+.cursor/
+
+# Documentation (not needed at runtime)
+/docs/
+/README.md
+/SECURITY.md
+/AGENT_SECURITY.md

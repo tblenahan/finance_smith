@@ -1,6 +1,28 @@
 name: finance-smith
 
 services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: finance-smith:local
+    # Use host network for consistency with the db service: avoids veth-pair
+    # issues on WSL2/VM setups and lets DATABASE_URL resolve to 127.0.0.1:5432.
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Non-secret overrides. All secrets come from secrets.enc.env via SOPS.
+      PHX_HOST: ${PHX_HOST:-localhost}
+      PORT: ${PORT:-4000}
+      LOG_DIR: /app/logs
+    volumes:
+      - app_logs:/app/logs
+    secrets:
+      - age_key
+
   db:
     image: postgres:17
     # Use host network to avoid veth pair creation (fixes "operation not supported"
@@ -49,3 +71,11 @@ services:
 
 volumes:
   postgres_data:
+  app_logs:
+
+secrets:
+  age_key:
+    # The age private key used by SOPS to decrypt secrets.enc.env at boot.
+    # Generate once with: age-keygen -o age.key && chmod 600 age.key
+    # age.key is gitignored and must never be committed.
+    file: ./age.key

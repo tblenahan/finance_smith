@@ -41,3 +41,8 @@ data/
 /logs/
 /logs/*.log
 
+# SOPS / Age — the encrypted file (secrets.enc.env) IS committed; key material never is
+age.key
+*.age
+secrets.dec.env
+

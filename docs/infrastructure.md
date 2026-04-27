@@ -263,23 +263,113 @@ In dev, empty B2 settings default to `""` in [`config/dev.exs`](../config/dev.ex
 
 ## Environment variables (summary)
 
-Align with [`.env.example`](../.env.example). Production-only requirements are enforced in [`config/runtime.exs`](../config/runtime.exs).
+Dev/test: align with [`.env.example`](../.env.example) and load via `config/config.exs`.
+Production: all secrets are read from `secrets.enc.env` via SOPS (see "Container deployment
+with SOPS" section above). Non-secret overrides (`PHX_HOST`, `PORT`, `LOG_DIR`) are set in
+the Compose service environment. Production-only requirements are enforced by startup
+`raise` in [`config/runtime.exs`](../config/runtime.exs).
 
-| Variable | Used for |
-|----------|-----------|
-| `COMPOSE_PROJECT_NAME` | Docker Compose project name |
-| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT` | DB connection (dev/test via `dev.exs` / `test.exs`) |
-| `POSTGRES_DB`, `POSTGRES_TEST_DB` | Dev and test database names |
-| `POSTGRES_POOL_SIZE` | Pool size in dev |
-| `DATABASE_URL`, `POOL_SIZE` | **Production** repo URL and pool ([`runtime.exs`](../config/runtime.exs)) |
-| `CLOAK_KEY`, `CLOAK_KEY_TEST` | Vault / AshCloak (dev and test respectively where configured) |
-| `SECRET_KEY_BASE`, `SECRET_KEY_BASE_TEST` | Phoenix session signing (dev/test); **`SECRET_KEY_BASE`** required in prod |
-| `PORT` | HTTP port in prod (default 4000) |
-| `PLAID_CLIENT_ID`, `SANDBOX_PLAID_SECRET` | Plaid API (dev/test sandbox; also prod when `PLAID_ENV=sandbox`) |
-| `PLAID_CLIENT_ID`, `PRODUCTION_PLAID_SECRET` | Plaid API (production when `PLAID_ENV` is unset or `production`) |
-| `PLAID_ENV` | Plaid environment selector (`sandbox` or `production`; default `production`). Set to `sandbox` for staging prod-mode containers. |
-| `B2_KEY_ID`, `B2_APP_KEY`, `B2_BUCKET_NAME` | B2 API (required in prod `runtime.exs`) |
-| `B2_KEY_NAME` | Optional operator label (not required by app config) |
+| Variable | Used for | Prod source |
+|----------|-----------|-------------|
+| `COMPOSE_PROJECT_NAME` | Docker Compose project name | — |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT` | DB connection (dev/test via `dev.exs` / `test.exs`) | — |
+| `POSTGRES_DB`, `POSTGRES_TEST_DB` | Dev and test database names | — |
+| `POSTGRES_POOL_SIZE` | Pool size in dev | — |
+| `DATABASE_URL`, `POOL_SIZE` | **Production** repo URL and pool ([`runtime.exs`](../config/runtime.exs)) | `secrets.enc.env` |
+| `CLOAK_KEY`, `CLOAK_KEY_TEST` | Vault / AshCloak (dev and test respectively where configured) | `secrets.enc.env` |
+| `SECRET_KEY_BASE`, `SECRET_KEY_BASE_TEST` | Phoenix session signing (dev/test); **`SECRET_KEY_BASE`** required in prod | `secrets.enc.env` |
+| `PORT` | HTTP port in prod (default 4000) | Compose env |
+| `PHX_HOST` | Public hostname for generated URLs (prod required, dev optional) | Compose env |
+| `PLAID_CLIENT_ID`, `SANDBOX_PLAID_SECRET` | Plaid API (dev/test sandbox; also prod when `PLAID_ENV=sandbox`) | `secrets.enc.env` |
+| `PLAID_CLIENT_ID`, `PRODUCTION_PLAID_SECRET` | Plaid API (production when `PLAID_ENV` is unset or `production`) | `secrets.enc.env` |
+| `PLAID_ENV` | Plaid environment selector (`sandbox` or `production`; default `production`). Set to `sandbox` for staging prod-mode containers. | `secrets.enc.env` |
+| `B2_KEY_ID`, `B2_APP_KEY`, `B2_BUCKET_NAME` | B2 API (required in prod `runtime.exs`) | `secrets.enc.env` |
+| `B2_KEY_NAME` | Optional operator label (not required by app config) | — |
+
+---
+
+## Container deployment with SOPS
+
+Finance Smith ships as a Docker Compose stack. The `app` service runs an Elixir release
+built by the project [`Dockerfile`](../Dockerfile). All production secrets are injected at
+container start via **SOPS** + **Age** so the encrypted file (`secrets.enc.env`) can be
+committed to the repository and the plaintext never touches the image layer or the git
+history.
+
+### How it works
+
+```
+secrets.enc.env  (committed, SOPS-encrypted dotenv)
+age.key          (gitignored, operator-owned)
+     │
+     └── Docker Secrets mounts age.key at /run/secrets/age_key
+                                │
+              entrypoint.sh reads SOPS_AGE_KEY_FILE=/run/secrets/age_key
+                                │
+              sops exec-env /app/secrets.enc.env "bin/finance_smith eval ..."
+                → FinanceSmith.Release.migrate()   ← pending migrations
+              exec sops exec-env /app/secrets.enc.env "bin/finance_smith start"
+                → BEAM starts as PID 1
+```
+
+The entrypoint is [`rel/overlays/entrypoint.sh`](../rel/overlays/entrypoint.sh), which
+is copied into the release root at `/app/entrypoint.sh` by `mix release`.
+
+The `db` service uses `network_mode: host`, and `DATABASE_URL` inside `secrets.enc.env`
+points to `127.0.0.1:5432`. The `app` service also uses `network_mode: host` for the same
+WSL2/VM-compatibility reason.
+
+### First-time setup
+
+1. **Generate an Age key** (once per deployment host):
+
+   ```bash
+   age-keygen -o age.key && chmod 600 age.key
+   ```
+
+2. **Fill in secrets**:
+
+   ```bash
+   cp secrets.enc.env.example secrets.dec.env
+   $EDITOR secrets.dec.env          # set all required values
+   ```
+
+3. **Encrypt**:
+
+   ```bash
+   sops -e --age "$(grep -oP 'public key: \K.*' age.key)" \
+        secrets.dec.env > secrets.enc.env
+   shred -u secrets.dec.env
+   ```
+
+4. **Build the image**:
+
+   ```bash
+   bin/docker-build.sh              # validates secrets.enc.env then builds
+   ```
+
+5. **Start the stack**:
+
+   ```bash
+   docker compose up -d             # boots db + app
+   ```
+
+### Runtime notes
+
+| Concern | Detail |
+|---------|--------|
+| **Migrations** | `FinanceSmith.Release.migrate/0` ([`lib/finance_smith/release.ex`](../lib/finance_smith/release.ex)) runs all pending Ecto migrations before the supervision tree starts on every container boot. |
+| **PID 1** | `exec sops exec-env … bin/finance_smith start` gives PID 1 to the BEAM so `SIGTERM` triggers graceful OTP shutdown. |
+| **Log volume** | `app_logs` named volume is mounted at `/app/logs`; `LOG_DIR` is set to `/app/logs` by the Compose service so the rotating file logger writes there. |
+| **Secret rotation** | Re-encrypt `secrets.enc.env`, rebuild the image (`bin/docker-build.sh`), and restart (`docker compose up -d --force-recreate app`). |
+| **Staging with Plaid Sandbox** | Set `PLAID_ENV=sandbox` and `SANDBOX_PLAID_SECRET=…` in `secrets.dec.env` before encrypting. The container will connect to `sandbox.plaid.com` at runtime. |
+| **age.key path override** | Override the `./age.key` path in `compose.override.yaml` via `secrets: age_key: file: /path/to/age.key`. |
+
+### Build-context guard
+
+`bin/docker-build.sh` pre-checks that `secrets.enc.env` exists and prints the above
+workflow if it is missing — so a fresh `git clone` produces a clear error rather than a
+confusing Docker `COPY` failure.
 
 ---
 
