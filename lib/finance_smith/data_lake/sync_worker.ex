@@ -92,6 +92,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
       sync_all_pages(updated_item)
     else
       Logger.info("[SyncWorker] Sync complete. plaid_item=#{plaid_item.id}")
+      refresh_balances!(updated_item)
       complete_sync!(updated_item)
       :ok
     end
@@ -164,6 +165,58 @@ defmodule FinanceSmith.DataLake.SyncWorker do
     |> Ash.update!(authorize?: false)
   end
 
+  # Fetches real-time balances from Plaid and persists them for each account.
+  # A failure here logs a warning but does NOT raise — stale balances are
+  # preferable to losing a sync run or triggering Oban retries.
+  defp refresh_balances!(%PlaidItem{access_token: token, accounts: accounts} = plaid_item) do
+    case plaid_client().get_balance(%{access_token: token}) do
+      {:ok, %{accounts: plaid_accounts}} ->
+        account_lookup = Map.new(accounts, fn a -> {a.plaid_account_id, a} end)
+
+        Enum.each(plaid_accounts, fn plaid_account ->
+          case Map.fetch(account_lookup, plaid_account.account_id) do
+            {:ok, account} ->
+              new_balance = balance_to_cents(plaid_account.balances)
+              new_limit = balance_limit_to_cents(plaid_account.balances)
+
+              # System-initiated update; no actor present in the sync pipeline.
+              account
+              |> Ash.Changeset.for_update(
+                :update_balance,
+                %{current_balance: new_balance, credit_limit: new_limit},
+                authorize?: false
+              )
+              |> Ash.update!(authorize?: false)
+
+            :error ->
+              Logger.warning(
+                "[SyncWorker] Balance refresh: unknown plaid_account_id=#{plaid_account.account_id} — skipping"
+              )
+          end
+        end)
+
+        Logger.info(
+          "[SyncWorker] Balances refreshed. plaid_item=#{plaid_item.id} accounts=#{length(plaid_accounts)}"
+        )
+
+      {:error, reason} ->
+        Logger.warning(
+          "[SyncWorker] Balance refresh failed — sync still complete. plaid_item=#{plaid_item.id} reason=#{inspect(reason)}"
+        )
+    end
+  end
+
+  defp balance_to_cents(nil), do: nil
+
+  defp balance_to_cents(%{current: current}) when is_number(current) do
+    round(current * 100)
+  end
+
+  defp balance_to_cents(_), do: nil
+
+  defp balance_limit_to_cents(%{limit: limit}) when is_number(limit), do: round(limit * 100)
+  defp balance_limit_to_cents(_), do: nil
+
   defp load_plaid_item!(id) do
     Banking.PlaidItem
     |> Ash.Query.filter(id == ^id)
@@ -173,5 +226,9 @@ defmodule FinanceSmith.DataLake.SyncWorker do
       nil -> raise "[SyncWorker] PlaidItem not found: #{id}"
       item -> item
     end
+  end
+
+  defp plaid_client do
+    Application.get_env(:finance_smith, :plaid_client, FinanceSmith.Banking.Plaid)
   end
 end

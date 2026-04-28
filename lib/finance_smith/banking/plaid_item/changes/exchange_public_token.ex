@@ -106,7 +106,8 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
       mask: plaid_account.mask,
       type: normalize_plaid_string(plaid_account.type),
       subtype: normalize_plaid_string(plaid_account.subtype),
-      current_balance: balance_to_cents(plaid_account.balances)
+      current_balance: balance_to_cents(plaid_account.balances),
+      credit_limit: balance_limit_to_cents(plaid_account.balances)
     }
 
     Account
@@ -116,7 +117,7 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
 
   defp normalize_plaid_string(nil), do: nil
   defp normalize_plaid_string(s) when is_atom(s), do: Atom.to_string(s)
-  defp normalize_plaid_string(s) when is_binary(s), do: s
+  defp normalize_plaid_string(s) when is_binary(s), do: String.downcase(s)
 
   defp balance_to_cents(nil), do: nil
 
@@ -125,6 +126,9 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
   end
 
   defp balance_to_cents(_), do: nil
+
+  defp balance_limit_to_cents(%{limit: limit}) when is_number(limit), do: round(limit * 100)
+  defp balance_limit_to_cents(_), do: nil
 
   defp plaid_client do
     Application.get_env(:finance_smith, :plaid_client, FinanceSmith.Banking.Plaid)

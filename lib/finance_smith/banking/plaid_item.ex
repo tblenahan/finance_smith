@@ -149,12 +149,15 @@ defmodule FinanceSmith.Banking.PlaidItem do
 
   aggregates do
     sum :kpi_assets, [:accounts], :current_balance do
-      filter expr(type not in ["credit", "loan"])
+      filter expr(
+               type not in ["credit", "loan"] and status == :active and is_nil(duplicate_of_id)
+             )
+
       default 0
     end
 
     sum :kpi_liabilities, [:accounts], :current_balance do
-      filter expr(type in ["credit", "loan"])
+      filter expr(type in ["credit", "loan"] and status == :active and is_nil(duplicate_of_id))
       default 0
     end
 

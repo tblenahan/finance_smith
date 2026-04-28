@@ -21,6 +21,10 @@ defmodule FinanceSmith.Banking.Account do
 
   actions do
     defaults [:read, :destroy, create: :*, update: :*]
+
+    update :update_balance do
+      accept [:current_balance, :credit_limit]
+    end
   end
 
   policies do
@@ -55,6 +59,7 @@ defmodule FinanceSmith.Banking.Account do
     attribute :subtype, :string, public?: true
 
     attribute :current_balance, :integer, public?: true
+    attribute :credit_limit, :integer, public?: true
 
     attribute :status, FinanceSmith.Banking.Types.AccountStatus do
       allow_nil? false
@@ -74,6 +79,10 @@ defmodule FinanceSmith.Banking.Account do
     belongs_to :duplicate_of, FinanceSmith.Banking.Account
 
     has_many :transactions, FinanceSmith.Banking.Transaction
+  end
+
+  calculations do
+    calculate :available_credit, :integer, expr(credit_limit - current_balance)
   end
 
   identities do
