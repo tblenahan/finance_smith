@@ -38,6 +38,12 @@ defmodule FinanceSmithWeb.Layouts do
                     The Ledger
                   </.link>
                   <.link
+                    navigate={~p"/accounts"}
+                    class={["rounded px-2 py-1 font-mono text-sm transition-colors", (assigns[:current_nav] == :accounts && "text-emerald-400") || "text-gray-500 hover:text-emerald-400"]}
+                  >
+                    Accounts
+                  </.link>
+                  <.link
                     navigate={~p"/users/settings"}
                     class={["rounded px-2 py-1 font-mono text-sm transition-colors", (assigns[:current_nav] == :settings && "text-emerald-400") || "text-gray-500 hover:text-emerald-400"]}
                   >
