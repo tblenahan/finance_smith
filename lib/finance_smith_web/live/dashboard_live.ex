@@ -3,6 +3,7 @@ defmodule FinanceSmithWeb.DashboardLive do
 
   alias FinanceSmith.Banking
   alias FinanceSmith.Banking.PlaidCategories
+  alias FinanceSmith.DataLake.SyncWorker
   alias FinanceSmith.Identity
   alias FinanceSmithWeb.MoneyFormat
   alias FinanceSmithWeb.TransactionLiveHelpers
@@ -15,7 +16,6 @@ defmodule FinanceSmithWeb.DashboardLive do
 
   def mount(_params, _session, socket) do
     user = socket.assigns.current_user
-    plaid_items = load_active_plaid_items(user)
     view_scope = default_scope(user)
     scope = parse_scope(view_scope)
 
@@ -36,7 +36,6 @@ defmodule FinanceSmithWeb.DashboardLive do
       |> assign(:timeframes, @timeframes)
       |> assign(:view_scope, view_scope)
       |> assign(:scope, scope)
-      |> assign(:plaid_items, plaid_items)
       |> assign(kpis)
       |> assign(:tx_params, TransactionLiveHelpers.default_tx_params())
       |> assign(
@@ -129,6 +128,20 @@ defmodule FinanceSmithWeb.DashboardLive do
     {:noreply, socket}
   end
 
+  def handle_event("sync_accounts", _params, socket) do
+    user = socket.assigns.current_user
+    items = Banking.list_active_plaid_items!(actor: user)
+
+    if items == [] do
+      {:noreply, put_flash(socket, :info, "No active integrations. Connect a data source first.")}
+    else
+      Enum.each(items, fn %{id: id} -> SyncWorker.enqueue(id) end)
+
+      {:noreply,
+       put_flash(socket, :info, "Synchronization initiated. The ledger will update shortly.")}
+    end
+  end
+
   def handle_event("set_timeframe", %{"range" => range}, socket)
       when range in @timeframes do
     socket =
@@ -177,92 +190,51 @@ defmodule FinanceSmithWeb.DashboardLive do
             Your financial data, consolidated. Inevitable.
           </.p>
         </div>
-        <.button
-          phx-click="request_link_token"
-          size="sm"
-          color="gray"
-          variant="outline"
-          class="font-mono text-xs border-gray-800 text-emerald-500 hover:border-emerald-500/50"
-        >
-          + Add Integration
-        </.button>
+        <div class="flex items-center gap-2">
+          <.button
+            phx-click="sync_accounts"
+            phx-disable-with="Syncing..."
+            size="sm"
+            color="gray"
+            variant="outline"
+            class="font-mono text-xs border-gray-800 text-gray-400 hover:border-gray-600 hover:text-gray-200"
+          >
+            Sync Accounts
+          </.button>
+
+          <.button
+            phx-click="request_link_token"
+            size="sm"
+            color="gray"
+            variant="outline"
+            class="font-mono text-xs border-gray-800 text-emerald-500 hover:border-emerald-500/50"
+          >
+            + Add Integration
+          </.button>
+        </div>
       </div>
 
       <div class="grid grid-cols-1 md:grid-cols-3 border border-gray-800 rounded-lg overflow-hidden bg-gray-950/50">
         <div class="p-5 border-b md:border-b-0 md:border-r border-gray-800">
-          <div class="flex items-center justify-between">
-            <p class="text-[10px] font-mono text-gray-500 uppercase tracking-widest">Net Worth</p>
-            <%= if @scope_streams_count > 0 do %>
-              <.badge
-                color="success"
-                variant="outline"
-                size="sm"
-                class="font-mono text-[9px] border-emerald-900/30 text-emerald-500"
-              >
-                Calculated
-              </.badge>
-            <% else %>
-              <.badge
-                color="gray"
-                variant="outline"
-                size="sm"
-                class="font-mono text-[9px] border-gray-800 text-gray-600"
-              >
-                Uncalculated
-              </.badge>
-            <% end %>
-          </div>
+          <p class="text-[10px] font-mono text-gray-500 uppercase tracking-widest">Net Worth</p>
           <p class="mt-2 text-3xl font-mono text-gray-100 tracking-tight">
             {MoneyFormat.format(@scope_net_worth, nil_display: "$0.00")}
           </p>
         </div>
 
         <div class="p-5 border-b md:border-b-0 md:border-r border-gray-800">
-          <div class="flex items-center justify-between">
-            <p class="text-[10px] font-mono text-gray-500 uppercase tracking-widest">
-              30-Day Outflow
-            </p>
-            <.badge
-              color="gray"
-              variant="outline"
-              size="sm"
-              class="font-mono text-[9px] border-gray-800 text-gray-600"
-            >
-              30d
-            </.badge>
-          </div>
+          <p class="text-[10px] font-mono text-gray-500 uppercase tracking-widest">Total Assets</p>
           <p class="mt-2 text-3xl font-mono text-gray-100 tracking-tight">
-            {MoneyFormat.format(@scope_outflow_30d, nil_display: "$0.00")}
+            {MoneyFormat.format(@scope_total_assets, nil_display: "$0.00")}
           </p>
         </div>
 
         <div class="p-5">
-          <div class="flex items-center justify-between">
-            <p class="text-[10px] font-mono text-gray-500 uppercase tracking-widest">
-              {@scope_streams_label}
-            </p>
-            <%= if @scope_streams_count > 0 do %>
-              <.badge
-                color="success"
-                variant="outline"
-                size="sm"
-                class="font-mono text-[9px] border-emerald-900/30 text-emerald-500"
-              >
-                Connected
-              </.badge>
-            <% else %>
-              <.badge
-                color="danger"
-                variant="outline"
-                size="sm"
-                class="font-mono text-[9px] border-red-900/30 text-red-500"
-              >
-                Severed
-              </.badge>
-            <% end %>
-          </div>
+          <p class="text-[10px] font-mono text-gray-500 uppercase tracking-widest">
+            Total Liabilities
+          </p>
           <p class="mt-2 text-3xl font-mono text-gray-100 tracking-tight">
-            {@scope_streams_count}
+            {MoneyFormat.format(@scope_total_liabilities, nil_display: "$0.00")}
           </p>
         </div>
       </div>
@@ -281,7 +253,7 @@ defmodule FinanceSmithWeb.DashboardLive do
                 name="scope"
                 id="view-scope-select"
                 value={@view_scope}
-                options={scope_options(@current_user, @plaid_items)}
+                options={scope_options(@current_user)}
                 class="bg-gray-900 border border-gray-800 rounded text-gray-400 font-mono text-[10px] uppercase tracking-wider px-2 py-1.5 focus:outline-none focus:border-gray-600 cursor-pointer"
               />
             </form>
@@ -423,123 +395,50 @@ defmodule FinanceSmithWeb.DashboardLive do
 
   defp parse_scope("scope_household"), do: :household
   defp parse_scope("scope_personal"), do: :personal
-  defp parse_scope("plaid_item:" <> id), do: {:plaid_item, id}
   defp parse_scope(_), do: :personal
 
-  # Validates a raw scope string from the client. Returns {:ok, scope} or :error.
-  # UUIDs in "plaid_item:<id>" are validated to prevent type-cast errors downstream.
   defp validate_scope("scope_household"), do: {:ok, "scope_household"}
   defp validate_scope("scope_personal"), do: {:ok, "scope_personal"}
-
-  defp validate_scope("plaid_item:" <> id) do
-    case Ecto.UUID.cast(id) do
-      {:ok, _} -> {:ok, "plaid_item:#{id}"}
-      :error -> :error
-    end
-  end
-
   defp validate_scope(_), do: :error
 
-  # Returns a map merged into the Transaction :list / :categories action args.
   defp scope_filters(:household, _user), do: %{}
   defp scope_filters(:personal, user), do: %{user_id: user.id}
-  defp scope_filters({:plaid_item, id}, _user), do: %{plaid_item_id: id}
 
-  # Builds the options list for the scope <.input type="select">.
-  # Groups scopes with optgroups: top-level scope first, then institutions.
-  defp scope_options(user, plaid_items) do
-    scope_group =
-      if user.household_id do
-        [{"Household", "scope_household"}, {"Personal", "scope_personal"}]
-      else
-        [{"Personal", "scope_personal"}]
-      end
-
-    if plaid_items == [] do
-      scope_group
+  defp scope_options(user) do
+    if user.household_id do
+      [{"Household", "scope_household"}, {"Personal", "scope_personal"}]
     else
-      institution_group =
-        Enum.map(plaid_items, fn item ->
-          {item.institution_name || "Unknown Institution", "plaid_item:#{item.id}"}
-        end)
-
-      [{"Scope", scope_group}, {"Institution", institution_group}]
+      [{"Personal", "scope_personal"}]
     end
   end
 
   # --- Scoped KPIs -------------------------------------------------------
 
-  defp load_active_plaid_items(user) do
-    # Returns all active PlaidItems the actor can see: own items + household
-    # members' items (policy handles scoping automatically).
-    Banking.list_active_plaid_items!(actor: user)
-  end
-
-  # Fetches KPIs using Postgres aggregates rather than loading rows into the
-  # BEAM and reducing in Elixir.
   defp fetch_scoped_kpis(:personal, user) do
     u =
       Identity.get_user_with_kpis!(user.id,
-        load: [
-          :total_assets,
-          :total_liabilities,
-          :outflow_30d,
-          :inflow_30d,
-          :active_streams_count
-        ],
+        load: [:total_assets, :total_liabilities],
         actor: user
       )
 
     %{
       scope_net_worth: u.total_assets - u.total_liabilities,
-      scope_outflow_30d: u.outflow_30d,
-      scope_inflow_30d: u.inflow_30d,
-      scope_streams_count: u.active_streams_count,
-      scope_streams_label: "Active Data Streams"
+      scope_total_assets: u.total_assets,
+      scope_total_liabilities: u.total_liabilities
     }
   end
 
   defp fetch_scoped_kpis(:household, user) do
     h =
       Identity.get_household_with_kpis!(user.household_id,
-        load: [
-          :total_assets,
-          :total_liabilities,
-          :outflow_30d,
-          :inflow_30d,
-          :active_streams_count
-        ],
+        load: [:total_assets, :total_liabilities],
         actor: user
       )
 
     %{
       scope_net_worth: h.total_assets - h.total_liabilities,
-      scope_outflow_30d: h.outflow_30d,
-      scope_inflow_30d: h.inflow_30d,
-      scope_streams_count: h.active_streams_count,
-      scope_streams_label: "Active Data Streams"
-    }
-  end
-
-  defp fetch_scoped_kpis({:plaid_item, id}, user) do
-    item =
-      Banking.get_plaid_item_kpis!(id,
-        load: [
-          :kpi_assets,
-          :kpi_liabilities,
-          :kpi_outflow_30d,
-          :kpi_inflow_30d,
-          :kpi_active_accounts_count
-        ],
-        actor: user
-      )
-
-    %{
-      scope_net_worth: item.kpi_assets - item.kpi_liabilities,
-      scope_outflow_30d: item.kpi_outflow_30d,
-      scope_inflow_30d: item.kpi_inflow_30d,
-      scope_streams_count: item.kpi_active_accounts_count,
-      scope_streams_label: "Active Accounts"
+      scope_total_assets: h.total_assets,
+      scope_total_liabilities: h.total_liabilities
     }
   end
 
