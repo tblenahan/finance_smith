@@ -111,7 +111,7 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
     }
 
     Account
-    |> Ash.Changeset.for_create(:create, attrs, authorize?: false)
+    |> Ash.Changeset.for_create(:upsert_from_plaid, attrs, authorize?: false)
     |> Ash.create!(authorize?: false)
   end
 

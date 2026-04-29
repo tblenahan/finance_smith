@@ -22,6 +22,24 @@ defmodule FinanceSmith.Banking.Account do
   actions do
     defaults [:read, :destroy, create: :*, update: :*]
 
+    create :upsert_from_plaid do
+      accept [
+        :plaid_account_id,
+        :plaid_item_id,
+        :name,
+        :mask,
+        :type,
+        :subtype,
+        :current_balance,
+        :credit_limit
+      ]
+
+      upsert? true
+      upsert_identity :unique_plaid_account_id
+
+      upsert_fields [:name, :mask, :type, :subtype, :current_balance, :credit_limit]
+    end
+
     update :update_balance do
       accept [:current_balance, :credit_limit]
     end
