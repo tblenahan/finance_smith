@@ -8,6 +8,7 @@ defmodule FinanceSmithWeb.DashboardLive do
   alias FinanceSmithWeb.MoneyFormat
   alias FinanceSmithWeb.TransactionLiveHelpers
   alias FinanceSmithWeb.TransactionTableComponent
+  alias FinanceSmithWeb.ViewScope
 
   require Logger
 
@@ -16,8 +17,8 @@ defmodule FinanceSmithWeb.DashboardLive do
 
   def mount(_params, _session, socket) do
     user = socket.assigns.current_user
-    view_scope = default_scope(user)
-    scope = parse_scope(view_scope)
+    view_scope = ViewScope.default_scope(user)
+    scope = ViewScope.parse_scope(view_scope)
 
     if connected?(socket) do
       FinanceSmithWeb.Endpoint.subscribe("plaid_item:sync_complete:#{user.id}")
@@ -154,7 +155,7 @@ defmodule FinanceSmithWeb.DashboardLive do
 
   def handle_event("change_view_scope", %{"scope" => raw_scope}, socket)
       when is_binary(raw_scope) do
-    case validate_scope(raw_scope) do
+    case ViewScope.validate_scope(raw_scope) do
       {:ok, view_scope} ->
         {:noreply, refresh_scope_data(socket, view_scope)}
 
@@ -253,7 +254,7 @@ defmodule FinanceSmithWeb.DashboardLive do
                 name="scope"
                 id="view-scope-select"
                 value={@view_scope}
-                options={scope_options(@current_user)}
+                options={ViewScope.scope_options(@current_user)}
                 class="bg-gray-900 border border-gray-800 rounded text-gray-400 font-mono text-[10px] uppercase tracking-wider px-2 py-1.5 focus:outline-none focus:border-gray-600 cursor-pointer"
               />
             </form>
@@ -388,29 +389,8 @@ defmodule FinanceSmithWeb.DashboardLive do
     Application.get_env(:finance_smith, :plaid_client, FinanceSmith.Banking.Plaid)
   end
 
-  # --- View Scope helpers -------------------------------------------------------
-
-  defp default_scope(%{household_id: hid}) when not is_nil(hid), do: "scope_household"
-  defp default_scope(_), do: "scope_personal"
-
-  defp parse_scope("scope_household"), do: :household
-  defp parse_scope("scope_personal"), do: :personal
-  defp parse_scope(_), do: :personal
-
-  defp validate_scope("scope_household"), do: {:ok, "scope_household"}
-  defp validate_scope("scope_personal"), do: {:ok, "scope_personal"}
-  defp validate_scope(_), do: :error
-
   defp scope_filters(:household, _user), do: %{}
   defp scope_filters(:personal, user), do: %{user_id: user.id}
-
-  defp scope_options(user) do
-    if user.household_id do
-      [{"Household", "scope_household"}, {"Personal", "scope_personal"}]
-    else
-      [{"Personal", "scope_personal"}]
-    end
-  end
 
   # --- Scoped KPIs -------------------------------------------------------
 
@@ -443,7 +423,7 @@ defmodule FinanceSmithWeb.DashboardLive do
   end
 
   defp refresh_scope_data(socket, view_scope) do
-    scope = parse_scope(view_scope)
+    scope = ViewScope.parse_scope(view_scope)
     user = socket.assigns.current_user
     kpis = fetch_scoped_kpis(scope, user)
 

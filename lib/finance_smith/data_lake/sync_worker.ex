@@ -181,14 +181,22 @@ defmodule FinanceSmith.DataLake.SyncWorker do
               new_balance = PlaidBalances.balance_to_cents(plaid_account.balances)
               new_limit = PlaidBalances.balance_limit_to_cents(plaid_account.balances)
 
-              # System-initiated update; no actor present in the sync pipeline.
               account
               |> Ash.Changeset.for_update(
                 :update_balance,
                 %{current_balance: new_balance, credit_limit: new_limit},
                 authorize?: false
               )
-              |> Ash.update!(authorize?: false)
+              |> Ash.update(authorize?: false)
+              |> case do
+                {:ok, _updated} ->
+                  :ok
+
+                {:error, reason} ->
+                  Logger.warning(
+                    "[SyncWorker] Balance update failed for account=#{account.id} — skipping. reason=#{inspect(reason)}"
+                  )
+              end
 
             :error ->
               Logger.warning(
