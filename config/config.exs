@@ -1,8 +1,11 @@
 import Config
 
-# Load project `.env` for dev/test before imported configs read `System.get_env/1`.
+# Load project `.env` before imported configs read `System.get_env/1`.
+# Includes prod for local / bootstrap runs; real deploys inject env directly and need not ship `.env`.
+# The RELEASE_ROOT guard prevents .env loading when the compiled release is started (Elixir sets
+# RELEASE_ROOT at runtime); it does not prevent .env from being sourced during `mix release` compilation.
 # Variables already set in the process environment are not overwritten.
-if config_env() in [:dev, :test] do
+if config_env() in [:dev, :test, :prod] and is_nil(System.get_env("RELEASE_ROOT")) do
   dotenv_path = Path.expand("../.env", __DIR__)
 
   if File.exists?(dotenv_path) do

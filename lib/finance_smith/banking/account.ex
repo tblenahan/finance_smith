@@ -21,6 +21,30 @@ defmodule FinanceSmith.Banking.Account do
 
   actions do
     defaults [:read, :destroy, create: :*, update: :*]
+
+    create :upsert_from_plaid do
+      accept [
+        :plaid_account_id,
+        :plaid_item_id,
+        :name,
+        :mask,
+        :type,
+        :subtype,
+        :current_balance,
+        :credit_limit
+      ]
+
+      upsert? true
+      upsert_identity :unique_plaid_account_id
+
+      # :status is intentionally excluded — manual deactivation is preserved across syncs.
+      # Plaid re-syncing an account should not resurrect one the user has deactivated.
+      upsert_fields [:name, :mask, :type, :subtype, :current_balance, :credit_limit]
+    end
+
+    update :update_balance do
+      accept [:current_balance, :credit_limit]
+    end
   end
 
   policies do
@@ -55,6 +79,7 @@ defmodule FinanceSmith.Banking.Account do
     attribute :subtype, :string, public?: true
 
     attribute :current_balance, :integer, public?: true
+    attribute :credit_limit, :integer, public?: true
 
     attribute :status, FinanceSmith.Banking.Types.AccountStatus do
       allow_nil? false
@@ -74,6 +99,12 @@ defmodule FinanceSmith.Banking.Account do
     belongs_to :duplicate_of, FinanceSmith.Banking.Account
 
     has_many :transactions, FinanceSmith.Banking.Transaction
+  end
+
+  calculations do
+    calculate :available_credit,
+              :integer,
+              expr(coalesce(credit_limit, 0) - coalesce(current_balance, 0))
   end
 
   identities do

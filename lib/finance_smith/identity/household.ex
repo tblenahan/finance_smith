@@ -53,12 +53,15 @@ defmodule FinanceSmith.Identity.Household do
 
   aggregates do
     sum :total_assets, [:users, :plaid_items, :accounts], :current_balance do
-      filter expr(type not in ["credit", "loan"])
+      filter expr(
+               type not in ["credit", "loan"] and status == :active and is_nil(duplicate_of_id)
+             )
+
       default 0
     end
 
     sum :total_liabilities, [:users, :plaid_items, :accounts], :current_balance do
-      filter expr(type in ["credit", "loan"])
+      filter expr(type in ["credit", "loan"] and status == :active and is_nil(duplicate_of_id))
       default 0
     end
 
@@ -74,6 +77,16 @@ defmodule FinanceSmith.Identity.Household do
 
     count :active_streams_count, [:users, :plaid_items] do
       filter expr(status == :active)
+    end
+
+    sum :total_credit, [:users, :plaid_items, :accounts], :credit_limit do
+      filter expr(type == "credit" and status == :active and is_nil(duplicate_of_id))
+      default 0
+    end
+
+    sum :total_available_credit, [:users, :plaid_items, :accounts], :available_credit do
+      filter expr(type == "credit" and status == :active and is_nil(duplicate_of_id))
+      default 0
     end
   end
 end
