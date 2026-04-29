@@ -104,7 +104,10 @@ defmodule FinanceSmith.Banking.Account do
   calculations do
     calculate :available_credit,
               :integer,
-              expr(coalesce(credit_limit, 0) - coalesce(current_balance, 0))
+              expr(
+                if(is_nil(credit_limit), 0, credit_limit) -
+                  if(is_nil(current_balance), 0, current_balance)
+              )
   end
 
   identities do
