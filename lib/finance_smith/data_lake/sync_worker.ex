@@ -36,7 +36,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
     unique: [period: 300, fields: [:args]]
 
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.PlaidItem
+  alias FinanceSmith.Banking.{PlaidBalances, PlaidItem}
   alias FinanceSmith.DataLake.{ProcessWorker, TransactionProcessor, Uploader}
 
   require Ash.Query
@@ -92,7 +92,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
       sync_all_pages(updated_item)
     else
       Logger.info("[SyncWorker] Sync complete. plaid_item=#{plaid_item.id}")
-      refresh_balances!(updated_item)
+      refresh_balances(updated_item)
       complete_sync!(updated_item)
       :ok
     end
@@ -168,16 +168,18 @@ defmodule FinanceSmith.DataLake.SyncWorker do
   # Fetches real-time balances from Plaid and persists them for each account.
   # A failure here logs a warning but does NOT raise — stale balances are
   # preferable to losing a sync run or triggering Oban retries.
-  defp refresh_balances!(%PlaidItem{access_token: token, accounts: accounts} = plaid_item) do
+  defp refresh_balances(%PlaidItem{access_token: token, accounts: accounts} = plaid_item) do
     case plaid_client().get_balance(%{access_token: token}) do
       {:ok, %{accounts: plaid_accounts}} ->
         account_lookup = Map.new(accounts, fn a -> {a.plaid_account_id, a} end)
 
+        # TODO: For households with many accounts, consider Ash.bulk_update or
+        # Task.async_stream with bounded concurrency to reduce sequential DB round-trips.
         Enum.each(plaid_accounts, fn plaid_account ->
           case Map.fetch(account_lookup, plaid_account.account_id) do
             {:ok, account} ->
-              new_balance = balance_to_cents(plaid_account.balances)
-              new_limit = balance_limit_to_cents(plaid_account.balances)
+              new_balance = PlaidBalances.balance_to_cents(plaid_account.balances)
+              new_limit = PlaidBalances.balance_limit_to_cents(plaid_account.balances)
 
               # System-initiated update; no actor present in the sync pipeline.
               account
@@ -205,17 +207,6 @@ defmodule FinanceSmith.DataLake.SyncWorker do
         )
     end
   end
-
-  defp balance_to_cents(nil), do: nil
-
-  defp balance_to_cents(%{current: current}) when is_number(current) do
-    round(current * 100)
-  end
-
-  defp balance_to_cents(_), do: nil
-
-  defp balance_limit_to_cents(%{limit: limit}) when is_number(limit), do: round(limit * 100)
-  defp balance_limit_to_cents(_), do: nil
 
   defp load_plaid_item!(id) do
     Banking.PlaidItem

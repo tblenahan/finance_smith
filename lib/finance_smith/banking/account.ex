@@ -37,6 +37,8 @@ defmodule FinanceSmith.Banking.Account do
       upsert? true
       upsert_identity :unique_plaid_account_id
 
+      # :status is intentionally excluded — manual deactivation is preserved across syncs.
+      # Plaid re-syncing an account should not resurrect one the user has deactivated.
       upsert_fields [:name, :mask, :type, :subtype, :current_balance, :credit_limit]
     end
 
@@ -100,7 +102,9 @@ defmodule FinanceSmith.Banking.Account do
   end
 
   calculations do
-    calculate :available_credit, :integer, expr(credit_limit - current_balance)
+    calculate :available_credit,
+              :integer,
+              expr(coalesce(credit_limit, 0) - coalesce(current_balance, 0))
   end
 
   identities do

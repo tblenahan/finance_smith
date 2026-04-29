@@ -4,8 +4,6 @@ defmodule FinanceSmithWeb.AccountsLive.Index do
   alias FinanceSmith.Identity
   alias FinanceSmithWeb.MoneyFormat
 
-  require Logger
-
   def mount(_params, _session, socket) do
     user = socket.assigns.current_user
     view_scope = default_scope(user)

@@ -15,7 +15,7 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
   use Ash.Resource.Change
 
   alias AshCloak
-  alias FinanceSmith.Banking.{Account, PlaidItem}
+  alias FinanceSmith.Banking.{Account, PlaidBalances, PlaidItem}
   alias FinanceSmith.DataLake.SyncWorker
 
   require Ash.Query
@@ -106,8 +106,8 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
       mask: plaid_account.mask,
       type: normalize_plaid_string(plaid_account.type),
       subtype: normalize_plaid_string(plaid_account.subtype),
-      current_balance: balance_to_cents(plaid_account.balances),
-      credit_limit: balance_limit_to_cents(plaid_account.balances)
+      current_balance: PlaidBalances.balance_to_cents(plaid_account.balances),
+      credit_limit: PlaidBalances.balance_limit_to_cents(plaid_account.balances)
     }
 
     Account
@@ -116,19 +116,8 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
   end
 
   defp normalize_plaid_string(nil), do: nil
-  defp normalize_plaid_string(s) when is_atom(s), do: Atom.to_string(s)
+  defp normalize_plaid_string(s) when is_atom(s), do: s |> Atom.to_string() |> String.downcase()
   defp normalize_plaid_string(s) when is_binary(s), do: String.downcase(s)
-
-  defp balance_to_cents(nil), do: nil
-
-  defp balance_to_cents(%{current: current}) when is_number(current) do
-    round(current * 100)
-  end
-
-  defp balance_to_cents(_), do: nil
-
-  defp balance_limit_to_cents(%{limit: limit}) when is_number(limit), do: round(limit * 100)
-  defp balance_limit_to_cents(_), do: nil
 
   defp plaid_client do
     Application.get_env(:finance_smith, :plaid_client, FinanceSmith.Banking.Plaid)
