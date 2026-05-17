@@ -37,10 +37,7 @@ data/
 # Cursor — agent prompt files stay local (not committed)
 .cursor/agents/
 
-<<<<<<< HEAD
 # Logs
 /logs/
 /logs/*.log
 
-=======
->>>>>>> b53f0a3 (chore: gitignore local Cursor agent definitions)
