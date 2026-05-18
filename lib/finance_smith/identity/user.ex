@@ -199,6 +199,7 @@ defmodule FinanceSmith.Identity.User do
 
   calculations do
     calculate :total_net_worth, :integer, expr(total_assets - total_liabilities)
+    calculate :total_available_credit, :integer, expr(total_credit - total_credit_balance)
   end
 
   aggregates do
@@ -234,7 +235,7 @@ defmodule FinanceSmith.Identity.User do
       default 0
     end
 
-    sum :total_available_credit, [:plaid_items, :accounts], :available_credit do
+    sum :total_credit_balance, [:plaid_items, :accounts], :current_balance do
       filter expr(type == "credit" and status == :active and is_nil(duplicate_of_id))
       default 0
     end
