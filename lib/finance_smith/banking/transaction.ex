@@ -80,22 +80,6 @@ defmodule FinanceSmith.Banking.Transaction do
       filter expr(is_nil(^arg(:user_id)) or account.plaid_item.user_id == ^arg(:user_id))
     end
 
-    read :categories do
-      argument :account_id, :uuid, allow_nil?: true
-      argument :plaid_item_id, :uuid, allow_nil?: true
-
-      prepare build(
-                select: [:personal_finance_category],
-                distinct: [:personal_finance_category],
-                sort: [personal_finance_category: :asc]
-              )
-
-      filter expr(not is_nil(personal_finance_category))
-      filter expr(is_nil(^arg(:account_id)) or account_id == ^arg(:account_id))
-
-      filter expr(is_nil(^arg(:plaid_item_id)) or account.plaid_item_id == ^arg(:plaid_item_id))
-    end
-
     read :list do
       argument :account_id, :uuid, allow_nil?: true
       argument :plaid_item_id, :uuid, allow_nil?: true
@@ -149,13 +133,6 @@ defmodule FinanceSmith.Banking.Transaction do
                        (not is_nil(^actor(:household_id)) and
                           account.plaid_item.user.household_id == ^actor(:household_id))
                    )
-    end
-
-    # Writes are system-only. TransactionProcessor / SyncWorker call with
-    # authorize?: false and bypass policies entirely. This stanza makes the
-    # default-deny posture explicit for any user-facing caller.
-    policy action_type([:create, :update, :destroy]) do
-      forbid_if always()
     end
 
     # Writes are system-only. TransactionProcessor / SyncWorker call with
