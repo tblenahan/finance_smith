@@ -83,7 +83,6 @@ defmodule FinanceSmith.Banking.Transaction do
     read :list do
       argument :account_id, :uuid, allow_nil?: true
       argument :plaid_item_id, :uuid, allow_nil?: true
-      argument :institution_name, :string, allow_nil?: true
       argument :user_id, :uuid, allow_nil?: true
       argument :date_from, :date, allow_nil?: true
       argument :date_to, :date, allow_nil?: true
@@ -103,12 +102,6 @@ defmodule FinanceSmith.Banking.Transaction do
 
       filter expr(is_nil(^arg(:account_id)) or account_id == ^arg(:account_id))
       filter expr(is_nil(^arg(:plaid_item_id)) or account.plaid_item_id == ^arg(:plaid_item_id))
-
-      filter expr(
-               is_nil(^arg(:institution_name)) or
-                 account.plaid_item.institution_name == ^arg(:institution_name)
-             )
-
       filter expr(is_nil(^arg(:user_id)) or account.plaid_item.user_id == ^arg(:user_id))
 
       filter expr(is_nil(^arg(:date_from)) or date >= ^arg(:date_from))
