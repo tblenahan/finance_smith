@@ -33,5 +33,22 @@ defmodule FinanceSmith.Banking do
       # Lightweight read for chart rendering — no pagination.
       define :list_transactions_for_chart, action: :for_chart
     end
+
+    resource FinanceSmith.Banking.MetaCategory do
+      define :create_meta_category, action: :create, args: [:name]
+      define :rename_meta_category, action: :rename
+      define :list_meta_categories, action: :read
+      define :get_meta_category_by_id, action: :read, get_by: [:id]
+      define :destroy_meta_category, action: :destroy
+    end
+
+    resource FinanceSmith.Banking.CategoryMapping do
+      define :upsert_category_mapping,
+        action: :create,
+        args: [:plaid_category, :meta_category_id]
+
+      define :list_category_mappings, action: :read
+      define :destroy_category_mapping, action: :destroy
+    end
   end
 end

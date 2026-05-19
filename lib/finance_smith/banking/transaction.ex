@@ -183,6 +183,19 @@ defmodule FinanceSmith.Banking.Transaction do
     end
   end
 
+  calculations do
+    # Derived from the actor's household CategoryMapping rules at read time.
+    # Both are opt-in (load: [:meta_category_id] / load: [:meta_category_name])
+    # and require no schema change to the transactions table.
+    calculate :meta_category_id,
+              :uuid,
+              FinanceSmith.Banking.Transaction.Calculations.MetaCategoryId
+
+    calculate :meta_category_name,
+              :string,
+              FinanceSmith.Banking.Transaction.Calculations.MetaCategoryName
+  end
+
   identities do
     identity :unique_plaid_id, [:plaid_transaction_id]
   end
