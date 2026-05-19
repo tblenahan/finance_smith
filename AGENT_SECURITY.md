@@ -34,6 +34,7 @@ When you implement a `[PLANNED]` control from that document, update **both** `SE
 - **NEVER** load `plaid_item.access_token` for bulk UI or broad `Ash.read!` lists. Load and use it only in the two code paths that perform Plaid API calls:
   1. **Sync pipeline** — `FinanceSmith.DataLake.SyncWorker` and its helpers.
   2. **Item creation** — `FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken`, which loads the token immediately after the `PlaidItem` is persisted in order to call Plaid `accounts/get` and seed `Account` rows. This single-record load inside an `after_action` hook is intentional and acceptable.
+- **Prefer UI-safe code interfaces:** For LiveViews and any non-system read path, use `FinanceSmith.Banking.get_plaid_item_summary_by_id/1` (action `:read_for_ui`) or `list_active_plaid_items/0` (action `:list_active`), both of which exclude `access_token`. The interface `get_plaid_item_by_id/1` uses the primary `:read` action and can decrypt the token — only use it in system/test contexts.
 - **NEVER** change the vault cipher away from AES-GCM without a documented key rotation and migration plan.
 - **NEVER** mark `access_token` as `sensitive?: false` or expose it in HTTP responses or logs.
 - New application-managed secrets (e.g. a future provider token) should use **AshCloak + `FinanceSmith.Vault`**, following the same pattern as `PlaidItem.access_token` or `User` MFA fields.
@@ -96,5 +97,5 @@ When you implement a `[PLANNED]` control from that document, update **both** `SE
 8. Do not add `authorize?: false` to **new** user-facing production paths without review. Workers and session/bootstrap code may continue to use it where already established.
 9. When adding or changing Ash policies, avoid a blanket `authorize_if always()` on sensitive actions without an explicit constraint (documented bypasses for unauthenticated actions such as `:register` / `:sign_in` are acceptable).
 10. Before adding a public provider webhook or callback, implement signature/JWT verification per `SECURITY.md`; never ship unverified enqueue endpoints.
-11. Run `mix audit` before committing changes to `mix.exs`.
+11. Run `mix audit` (alias for `mix deps.audit`) before committing changes to `mix.exs`. The `mix_audit` package is a dev dependency — run `mix deps.get` first if it is not yet compiled.
 12. Never add crypto or hashing dependencies unless they are well-audited libraries (e.g. `bcrypt_elixir`, `argon2_elixir`, `cloak`). Do not implement custom crypto.

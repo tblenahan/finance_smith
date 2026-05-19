@@ -30,6 +30,8 @@ defmodule FinanceSmith.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
+      {:decimal, "~> 3.0", override: true},
       {:sourceror, "~> 1.8", only: [:dev, :test]},
       {:lazy_html, ">= 0.0.0", only: :test},
       {:mox, "~> 1.0", only: :test},
@@ -72,6 +74,7 @@ defmodule FinanceSmith.MixProject do
     [
       test: ["ash.setup --quiet", "test"],
       setup: "ash.setup",
+      audit: "deps.audit",
       "assets.deploy": ["cmd npm run --prefix assets build:css", "esbuild default --minify"]
     ]
   end
