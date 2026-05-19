@@ -1,5 +1,9 @@
 # Database Schema
 
+## PostgreSQL schemas
+
+All application tables live in the **`core`** schema. The `machine` schema is reserved for Oban job tables (prefix configured in `config/config.exs`). The `analytics` schema is created by migrations but contains no tables yet.
+
 ## Entity-Relationship Diagram
 
 ```mermaid
@@ -22,6 +26,11 @@ erDiagram
         uuid household_id FK
         text email UK
         text password_hash
+        boolean mfa_enabled
+        bigint failed_auth_attempts
+        timestamptz locked_until "nullable; nil when not locked"
+        binary encrypted_mfa_secret "nullable; AshCloak AES-GCM"
+        binary encrypted_recovery_codes "nullable; AshCloak AES-GCM"
         timestamp inserted_at
         timestamp updated_at
     }
@@ -30,10 +39,10 @@ erDiagram
         uuid id PK
         uuid user_id FK
         text plaid_item_id UK
-        binary encrypted_access_token
+        binary encrypted_access_token "AshCloak AES-GCM"
         text institution_name
         timestamptz last_synced_at "nullable; set by complete_sync action"
-        text next_cursor
+        text next_cursor "nullable; Plaid cursor for transactions/sync"
         text status "active | error | disconnected"
         timestamp inserted_at
         timestamp updated_at
@@ -47,7 +56,8 @@ erDiagram
         text mask
         text type
         text subtype
-        bigint current_balance "integer cents"
+        bigint current_balance "integer cents; nullable"
+        bigint credit_limit "integer cents; nullable; credit accounts only"
         text status "active | quarantined | hidden"
         uuid duplicate_of_id FK "self-ref, nullable"
         timestamp inserted_at
@@ -57,12 +67,14 @@ erDiagram
     transactions {
         uuid id PK
         uuid account_id FK
-        text plaid_transaction_id UK "composite with date"
-        bigint amount "integer cents"
+        text plaid_transaction_id UK
+        bigint amount "integer cents; nullable"
         date date "NOT NULL, partition-ready"
-        text merchant_name
-        text_array category
+        text merchant_name "nullable"
+        text personal_finance_category "nullable; Plaid PFC label"
+        text website "nullable"
         boolean is_pending
+        map metadata "JSON; default empty map"
         timestamp inserted_at
         timestamp updated_at
     }
@@ -72,11 +84,11 @@ erDiagram
 
 | Ash Domain | Resource | Table |
 |---|---|---|
-| `FinanceSmith.Identity` | Household | `households` |
-| `FinanceSmith.Identity` | User | `users` |
-| `FinanceSmith.Banking` | PlaidItem | `plaid_items` |
-| `FinanceSmith.Banking` | Account | `accounts` |
-| `FinanceSmith.Banking` | Transaction | `transactions` |
+| `FinanceSmith.Identity` | Household | `core.households` |
+| `FinanceSmith.Identity` | User | `core.users` |
+| `FinanceSmith.Banking` | PlaidItem | `core.plaid_items` |
+| `FinanceSmith.Banking` | Account | `core.accounts` |
+| `FinanceSmith.Banking` | Transaction | `core.transactions` |
 
 ## Foreign Key Cascade Rules
 
@@ -85,7 +97,7 @@ erDiagram
 | `users.household_id` | RESTRICT | Must explicitly remove users before deleting a household |
 | `plaid_items.user_id` | CASCADE | Deleting a user removes all their Plaid connections |
 | `accounts.plaid_item_id` | CASCADE | Revoking a Plaid item removes its accounts |
-| `accounts.duplicate_of_id` | SET NULL | Removing the primary account clears the link |
+| `accounts.duplicate_of_id` | SET NULL | Removing the primary account clears the deduplication link |
 | `transactions.account_id` | CASCADE | Transactions live and die with their account |
 
 ## Index Summary
@@ -100,18 +112,24 @@ erDiagram
 | `accounts` | `plaid_item_id` | btree | FK join performance |
 | `accounts` | `duplicate_of_id` | btree | FK join performance |
 | `accounts` | `(plaid_item_id, status)` | composite | ETL quarantine queries |
-| `transactions` | `(plaid_transaction_id, date)` | unique | Identity lookup, partition-ready |
+| `transactions` | `plaid_transaction_id` | unique | Identity lookup (single-column; date dropped after migration) |
 | `transactions` | `account_id` | btree | FK join performance |
 | `transactions` | `(account_id, date)` | composite | Date-range analytics |
+| `transactions` | `(date, amount)` | composite | Chart and aggregate queries |
 | `transactions` | `account_id WHERE is_pending` | partial | Sync reconciliation |
+| `transactions` | `metadata` | GIN | JSON metadata search |
+| `transactions` | `(account_id, personal_finance_category)` | composite | Category filter performance |
+| `transactions` | `(account_id, personal_finance_category) WHERE amount > 0` | partial composite | Outflow-by-category aggregates |
 
 ## Encryption
 
-The `plaid_items.access_token` field is encrypted at rest using AshCloak + Cloak (AES-256-GCM). The plaintext attribute `access_token` is transparently encrypted/decrypted; the database stores only the `encrypted_access_token` binary column. The encryption key is read from the `CLOAK_KEY` environment variable.
+The `plaid_items.encrypted_access_token` column stores the Plaid `access_token` encrypted with AshCloak + Cloak (AES-256-GCM). The plaintext attribute `access_token` is transparently encrypted/decrypted; the database only ever sees the binary ciphertext. The encryption key is read from the `CLOAK_KEY` environment variable via `FinanceSmith.Vault`.
+
+The `users` table stores TOTP MFA state in `encrypted_mfa_secret` and `encrypted_recovery_codes`, encrypted with the same vault.
 
 ## Partition Readiness
 
 The `transactions` table is structured for future range partitioning by `date`:
 - `date` is NOT NULL (required for a partition key)
-- The unique constraint includes `date` (required by PostgreSQL for partitioned unique indexes)
+- The unique constraint is on `plaid_transaction_id` alone (as of migration `20260418215004`), which is compatible with future partitioned unique indexes
 - No partitioning is active yet; it can be enabled via `create_table_options: "PARTITION BY RANGE (date)"` when volume warrants it

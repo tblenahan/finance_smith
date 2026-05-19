@@ -7,7 +7,7 @@ This document describes **how Finance Smith is deployed and wired**: local Postg
 - [README.md](../README.md) — prerequisites, `mix ash.setup`, optional hooks and Adminer.
 - [SECURITY.md](../SECURITY.md) — household/operator security policy and practices.
 - [AGENT_SECURITY.md](../AGENT_SECURITY.md) — rules for developers and AI agents (secrets, Cloak, logging, dependencies).
-- [priv/repo/README.md](../priv/repo/README.md) — entity-relationship diagram, indexes, cascade rules.
+- [priv/repo/REPO_README.md](../priv/repo/REPO_README.md) — entity-relationship diagram, indexes, cascade rules.
 - [service-state-report.md](service-state-report.md) — deeper maturity and design notes (may overlap with this file).
 
 **Secrets:** Do not commit credentials. Policy for operators is in [SECURITY.md](../SECURITY.md); coding guardrails are in [AGENT_SECURITY.md](../AGENT_SECURITY.md). This file only lists **which** environment variables exist and **where** they are read.
@@ -101,7 +101,7 @@ Routing and pipelines live in [`lib/finance_smith_web/router.ex`](../lib/finance
 | Browser stack | Session, CSRF, flash, root layout, [`UserAuth`](../lib/finance_smith_web/user_auth.ex) |
 | Public | `/` (home), `/users/log_in`, `/users/register`, session POST/DELETE — [`UserLoginLive`](../lib/finance_smith_web/live/user_login_live.ex), [`UserRegistrationLive`](../lib/finance_smith_web/live/user_registration_live.ex) |
 | MFA pending | `/users/mfa/*` under `RequireMfaPending` and `LiveAuth :mfa_pending` — [`MfaVerifyLive`](../lib/finance_smith_web/live/mfa_verify_live.ex) |
-| Authenticated + MFA verified | `/dashboard`, `/users/settings`, `/users/settings/mfa` — plugs `RequireAuthenticated`, `RequireMfaVerified`, `LiveAuth :default` — [`DashboardLive`](../lib/finance_smith_web/live/dashboard_live.ex), [`UserSettingsLive`](../lib/finance_smith_web/live/user_settings_live.ex), [`MfaSetupLive`](../lib/finance_smith_web/live/mfa_setup_live.ex) |
+| Authenticated + MFA verified | `/dashboard`, `/accounts`, `/connections/:plaid_item_id`, `/accounts/:account_id`, `/users/settings`, `/users/settings/mfa`, `/oauth/callback/plaid` — plugs `RequireAuthenticated`, `RequireMfaVerified`, `LiveAuth :default` — [`DashboardLive`](../lib/finance_smith_web/live/dashboard_live.ex), [`AccountsLive.Index`](../lib/finance_smith_web/live/accounts_live/index.ex), [`ConnectionLive`](../lib/finance_smith_web/live/connection_live.ex), [`AccountLive`](../lib/finance_smith_web/live/account_live.ex), [`UserSettingsLive`](../lib/finance_smith_web/live/user_settings_live.ex), [`MfaSetupLive`](../lib/finance_smith_web/live/mfa_setup_live.ex), [`OAuthCallbackLive`](../lib/finance_smith_web/live/oauth_callback_live.ex) |
 
 There is **no** Plaid or B2 webhook HTTP route in the router today; sync is driven on demand (Oban) or by the user connecting an account via Plaid Link.
 
@@ -285,12 +285,13 @@ Align with [`.env.example`](../.env.example). Production-only requirements are e
 
 ## Intentional gaps (do not assume these exist)
 
-The codebase evolves; the following are **not** fully implemented or not present as of this map—check git for changes before relying on them:
+The codebase evolves; the following are **not** fully implemented as of this map — check git for changes before relying on them:
 
-- **SimpleFIN** — mentioned in product docs; no client module or ingestion path in `lib/`.
-- **Plaid webhooks** — no verified webhook endpoint in the router; sync is **on-demand** (Oban) or user-initiated via Plaid Link.
-- **Rich dashboard product** — filtering/grouping by institution, account type, and time grain as described in the README is **not** yet realized; the current dashboard shows a recent-transactions table (last 50) without filtering or aggregation.
+- **SimpleFIN** — mentioned in product docs as a future provider; no client module, dependency, or ingestion path in `lib/`.
+- **Plaid webhooks** — no verified inbound webhook endpoint in the router; sync is **on-demand** (Oban) or user-initiated via Plaid Link. `Sandbox.fire_webhook/1` test helpers exist but are outbound/test-only.
+- **Time-grain aggregation** — the dashboard ledger has keyset pagination (default 25 per page), date-range filters, category filters, merchant search, and column sorting, but no weekly/monthly bucketing tables or per-account-type grouping views.
+- **Custom user categories** — the ledger uses Plaid `personal_finance_category` labels only; user-defined categories are not implemented.
 - **B2 purge on `PlaidItem` delete** — database cascades exist; **object-store** cleanup under `plaid_sync/...` is not automated.
-- **Banking authorization policies** — `PlaidItem`, `Account`, and `Transaction` now declare `Ash.Policy.Authorizer` and household-scoped policies (see [AGENT_SECURITY.md §Authorization posture](../AGENT_SECURITY.md)). Background jobs and some internal paths still call these resources with `authorize?: false` where the action runs without an actor; every such call site is expected to document why in an adjacent comment.
+- **`analytics` schema** — created by the initial schema migration; no tables or resources use it yet.
 
 If you implement any of the above, update this document and [SECURITY.md](../SECURITY.md) / [AGENT_SECURITY.md](../AGENT_SECURITY.md) when security posture changes.

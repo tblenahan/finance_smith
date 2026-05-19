@@ -60,7 +60,10 @@ Contributors should keep tags aligned with the code. Coding constraints for agen
 | `PLAID_CLIENT_ID`, `PRODUCTION_PLAID_SECRET` | Plaid API (production) | **Production** — enforced via `runtime.exs` when `PLAID_ENV` is unset or `production` |
 | `PLAID_ENV` | Plaid environment selector (`sandbox` or `production`) | **Production** (`runtime.exs`). Defaults to `production`. Set to `sandbox` for prod-mode containers targeting Plaid Sandbox (e.g. staging). |
 | `B2_KEY_ID`, `B2_APP_KEY`, `B2_BUCKET_NAME` | Backblaze B2 | **Production** (`runtime.exs`). **Dev/test:** may be empty (archive disabled; sync still processes in memory) |
-| `POSTGRES_*`, `POSTGRES_POOL_SIZE` | Local or external DB in dev/test | **Dev/test** when not using `DATABASE_URL` |
+| `B2_KEY_NAME` | Informational operator label for the B2 key (not read by app config) | Optional |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_TEST_DB` | Local or external DB in dev/test | **Dev/test** when not using `DATABASE_URL` |
+| `POSTGRES_POOL_SIZE` | DB pool size in dev/test | **Dev/test** (`dev.exs`); production uses `POOL_SIZE` via `DATABASE_URL` |
+| `PHX_HOST` | Public hostname for Phoenix `Endpoint.url/0` — used for Plaid OAuth redirect URIs | **Production** required; **Dev** optional (set when using a Cloudflare Tunnel or similar for Plaid OAuth) |
 | `CLOUDFLARE_TUNNEL_TOKEN` | Cloudflare Tunnel daemon auth token | **Production** when using the tunnel; **local Compose** only if you run `docker compose --profile tunnel` (see [`compose.yaml`](compose.yaml)) |
 
 Additional keys (e.g. `CLOAK_KEY_TEST`, `POSTGRES_TEST_DB`) appear in [`.env.example`](.env.example).
@@ -173,7 +176,7 @@ Failed sign-in attempts are tracked; persistent lockout is enforced after repeat
 1. **Personal ownership** — `user_id == actor_id` (direct on `PlaidItem`; via `plaid_item.user_id` for `Account`; via `account.plaid_item.user_id` for `Transaction`).
 2. **Household membership** — the actor's `household_id` matches the owning user's `household_id`. Every registered user belongs to exactly one household (created automatically on registration). All household members can read each other's Plaid items, accounts, and transactions.
 
-This sharing model is intentional: Finance Smith is a single-household tool and household members are fully trusted. User-initiated writes are denied at the policy layer except **`PlaidItem.create_from_public_token`** (OAuth link completion). Background jobs (e.g. [`SyncWorker`](lib/finance_smith/data_lake/sync_worker.ex), [`TransactionProcessor`](lib/finance_smith/data_lake/transaction_processor.ex)) use **`authorize?: false`** for system-only persistence. The UI uses a summary read that does not select the cloaked **`access_token`**. Implementation details and agent rules: **[AGENT_SECURITY.md](AGENT_SECURITY.md)** (Authorization posture).
+This sharing model is intentional: Finance Smith is a single-household tool and household members are fully trusted. User-initiated writes are denied at the policy layer except **`PlaidItem.create_from_public_token`** (OAuth link completion). Background jobs (e.g. [`SyncWorker`](lib/finance_smith/data_lake/sync_worker.ex), [`TransactionProcessor`](lib/finance_smith/data_lake/transaction_processor.ex)) use **`authorize?: false`** for system-only persistence. LiveViews use the `get_plaid_item_summary_by_id` / `list_active_plaid_items` code interfaces (action `:read_for_ui` / `:list_active`), which do not select the cloaked `access_token`. The full-read code interface `get_plaid_item_by_id` (primary `:read`, which can decrypt the token) should only be used in non-UI, system contexts. Implementation details and agent rules: **[AGENT_SECURITY.md](AGENT_SECURITY.md)** (Authorization posture).
 
 #### `[ACTIVE]` Household aggregate reads
 
@@ -216,7 +219,7 @@ Any other reverse proxy (nginx, Caddy, Traefik, etc.) that correctly sets `x-for
 
 ### `[ACTIVE]` Elixir dependency auditing
 
-Run `mix audit` regularly (e.g. in CI) to surface known CVEs in dependencies. Patch within a reasonable window unless a documented exception exists.
+Run `mix audit` (alias for `mix deps.audit`, provided by the `mix_audit` dev dependency) to surface known CVEs in dependencies. Run it before modifying `mix.exs` and patch within a reasonable window. The project has no in-repo CI yet; run `mix audit` manually in your workflow.
 
 ### `[ACTIVE]` OS security patching
 

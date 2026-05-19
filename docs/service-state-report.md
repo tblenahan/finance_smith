@@ -1,6 +1,6 @@
 # Finance Smith — service state report
 
-This document captures the current architecture, design choices, dependencies, and maturity of the Finance Smith codebase. It reflects the repository as of **April 2026**; regenerate or amend when major areas land.
+This document captures the current architecture, design choices, dependencies, and maturity of the Finance Smith codebase. It reflects the repository as of **May 2026**; regenerate or amend when major areas land.
 
 ---
 
@@ -81,10 +81,10 @@ Two Ash domains are registered in [`config/config.exs`](../config/config.exs):
 |----------|------------------|
 | `create_plaid_item_from_public_token/2` | `PlaidItem :create_from_public_token` |
 | `complete_plaid_item_sync/1` | `PlaidItem :complete_sync` |
-| `get_plaid_item_by_id/1` | `PlaidItem` primary read, `get_by: [:id]` |
-| `get_plaid_item_summary_by_id/1` | `PlaidItem :read_for_ui` (no access token) |
-| `list_active_plaid_items/0` | `PlaidItem :list_active` |
-| `get_plaid_item_kpis/1` | `PlaidItem` read with KPI aggregate loads |
+| `get_plaid_item_by_id/1` | `PlaidItem` primary `:read`, `get_by: [:id]` — **includes decryptable `access_token`; use only in system/test contexts** |
+| `get_plaid_item_summary_by_id/1` | `PlaidItem :read_for_ui` — excludes `access_token`; prefer for all LiveViews |
+| `list_active_plaid_items/0` | `PlaidItem :list_active` — excludes `access_token`; prefer for listings |
+| `get_plaid_item_kpis/1` | `PlaidItem` primary `:read` with KPI aggregate loads — **includes decryptable `access_token`; use only in system contexts** |
 | `get_account_by_id/1` | `Account` read, `get_by: [:id]` |
 | `list_transactions/1` | `Transaction :list` (keyset, filterable) |
 | `list_transaction_categories/1` | `Transaction :categories` |
