@@ -95,10 +95,7 @@ defmodule FinanceSmith.Banking.Transaction do
                  max_page_size: 100,
                  required?: false
 
-      prepare build(
-                sort: [date: :desc, inserted_at: :desc],
-                load: [:account]
-              )
+      prepare build(load: [:account])
 
       filter expr(is_nil(^arg(:account_id)) or account_id == ^arg(:account_id))
       filter expr(is_nil(^arg(:plaid_item_id)) or account.plaid_item_id == ^arg(:plaid_item_id))

@@ -83,7 +83,7 @@ defmodule FinanceSmithWeb.TransactionLiveHelpers do
   def fetch_transactions(user, tx_params, scope_filters \\ %{}) do
     sort_field = Map.fetch!(@sort_field_atoms, tx_params.sort_by)
     sort_dir = Map.fetch!(@sort_dir_atoms, tx_params.sort_dir)
-    sort = [{sort_field, sort_dir}, {:inserted_at, :desc}]
+    sort = [{sort_field, sort_dir}, {:id, :desc}]
 
     page_opts =
       [limit: 25, count: true]

@@ -174,10 +174,16 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
       </div>
 
       <%!-- Keyset pagination bar --%>
+      <%!--
+        Ash.Page.Keyset stores the INPUT cursors in page.after/page.before (the values
+        passed in to fetch this page). The cursors for navigation are stored per-record
+        in record.__metadata__.keyset. Use the first record's keyset as the before cursor
+        (Previous) and the last record's keyset as the after cursor (Next).
+      --%>
       <div class="flex items-center justify-between px-4 py-3 border-t border-gray-800 bg-black">
         <%= if show_previous?(@params, @page) do %>
           <.link
-            patch={build_url(@base_url, %{@params | before_cursor: @page.before, after_cursor: nil})}
+            patch={build_url(@base_url, %{@params | before_cursor: List.first(@page.results).__metadata__.keyset, after_cursor: nil})}
             class="font-mono text-[10px] uppercase tracking-widest px-3 py-1.5 rounded border border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-200 transition-colors"
           >
             ← Previous
@@ -196,7 +202,7 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
 
         <%= if @page && @page.more? do %>
           <.link
-            patch={build_url(@base_url, %{@params | after_cursor: @page.after, before_cursor: nil})}
+            patch={build_url(@base_url, %{@params | after_cursor: List.last(@page.results).__metadata__.keyset, before_cursor: nil})}
             class="font-mono text-[10px] uppercase tracking-widest px-3 py-1.5 rounded border border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-200 transition-colors"
           >
             Next →
@@ -281,11 +287,17 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
     params.search || params.date_from || params.date_to || params.category
   end
 
-  # Only show "Previous" when the user has actually paged forward or backward,
-  # because keyset pages always expose a `before` cursor once results exist.
+  # Note: Ash.Page.Keyset.after/before hold the INPUT cursors used to fetch the
+  # current page, not the cursors for navigating to adjacent pages. Navigation
+  # cursors live in record.__metadata__.keyset. We use params.after_cursor /
+  # params.before_cursor (which mirror the URL state) to determine direction.
   defp show_previous?(_params, nil), do: false
-  defp show_previous?(_params, %{before: nil}), do: false
+  defp show_previous?(_params, %{results: []}), do: false
   defp show_previous?(%{after_cursor: nil, before_cursor: nil}, _page), do: false
+  # Navigated forward — a previous page always exists
+  defp show_previous?(%{after_cursor: ac}, _page) when not is_nil(ac), do: true
+  # Navigated backward — hide when more? is false, meaning we're back at page 1
+  defp show_previous?(%{before_cursor: bc}, %{more?: false}) when not is_nil(bc), do: false
   defp show_previous?(_params, _page), do: true
 
   # --- Display helpers --------------------------------------------------------
