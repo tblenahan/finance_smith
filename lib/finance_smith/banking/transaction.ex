@@ -12,6 +12,7 @@ defmodule FinanceSmith.Banking.Transaction do
 
     references do
       reference :account, on_delete: :delete, index?: true
+      reference :meta_category, on_delete: :nilify, index?: true
     end
 
     custom_indexes do
@@ -182,6 +183,10 @@ defmodule FinanceSmith.Banking.Transaction do
   relationships do
     belongs_to :account, FinanceSmith.Banking.Account do
       allow_nil? false
+      public? true
+    end
+
+    belongs_to :meta_category, FinanceSmith.Banking.MetaCategory do
       public? true
     end
   end
