@@ -23,6 +23,13 @@ defmodule FinanceSmith.Banking.MetaCategory do
       change FinanceSmith.Banking.MetaCategory.Changes.SetHouseholdFromActor
     end
 
+    # System workers (Oban jobs, seed scripts) call this action with
+    # authorize?: false. household_id is accepted directly instead of
+    # being derived from an actor so no actor context is needed.
+    create :create_system do
+      accept [:name, :household_id]
+    end
+
     update :update do
       primary? true
       accept [:name]

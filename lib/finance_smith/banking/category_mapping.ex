@@ -17,6 +17,13 @@ defmodule FinanceSmith.Banking.CategoryMapping do
 
   actions do
     defaults [:read, :destroy, create: :*, update: :*]
+
+    # System workers (Oban jobs, seed scripts) call this action with
+    # authorize?: false. All FK columns are accepted directly so
+    # Ash.bulk_create/4 can settle a full batch in one DB pass.
+    create :create_system do
+      accept [:household_id, :meta_category_id, :provider, :source_category_token, :unreviewed]
+    end
   end
 
   policies do
