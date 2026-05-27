@@ -20,15 +20,8 @@ defmodule Align.CategoryMappings do
 
   require Ash.Query
 
-  alias FinanceSmith.Banking.{CategoryMapping, MetaCategory, Transaction}
+  alias FinanceSmith.Banking.{CategoryMapping, CategoryResolution, MetaCategory, Transaction}
   alias FinanceSmith.Identity.Household
-
-  @plaid_primary_tokens ~w(
-    INCOME TRANSFER_IN TRANSFER_OUT LOAN_PAYMENTS BANK_FEES
-    ENTERTAINMENT FOOD_AND_DRINK GENERAL_MERCHANDISE HOME_IMPROVEMENT
-    MEDICAL PERSONAL_CARE GENERAL_SERVICES GOVERNMENT_AND_NON_PROFIT
-    TRANSPORTATION TRAVEL RENT_AND_UTILITIES
-  )
 
   def run do
     households = Ash.read!(Household, authorize?: false)
@@ -59,7 +52,7 @@ defmodule Align.CategoryMappings do
     else
       IO.puts("\nAligning household: #{household.name} (#{household.id})")
 
-      primary_lookup = load_primary_lookup(household.id)
+      primary_lookup = CategoryResolution.load_primary_mappings(household.id)
 
       uncategorized_mappings =
         CategoryMapping
@@ -71,13 +64,18 @@ defmodule Align.CategoryMappings do
 
       {to_align, no_match} =
         Enum.split_with(uncategorized_mappings, fn mapping ->
-          not is_nil(find_primary_prefix(mapping.source_category_token, primary_lookup))
+          not is_nil(
+            CategoryResolution.find_primary_prefix(mapping.source_category_token, primary_lookup)
+          )
         end)
 
       corrected_token_lookup =
         Map.new(to_align, fn mapping ->
           new_meta_category_id =
-            find_primary_prefix(mapping.source_category_token, primary_lookup)
+            CategoryResolution.find_primary_prefix(
+              mapping.source_category_token,
+              primary_lookup
+            )
 
           mapping
           |> Ash.Changeset.for_update(:update, %{meta_category_id: new_meta_category_id},
@@ -143,22 +141,6 @@ defmodule Align.CategoryMappings do
     end)
   end
 
-  defp load_primary_lookup(household_id) do
-    CategoryMapping
-    |> Ash.Query.filter(
-      household_id == ^household_id and
-        provider == "plaid" and
-        source_category_token in ^@plaid_primary_tokens
-    )
-    |> Ash.read!(authorize?: false)
-    |> Map.new(&{&1.source_category_token, &1.meta_category_id})
-  end
-
-  defp find_primary_prefix(token, primary_lookup) do
-    Enum.find_value(primary_lookup, fn {prefix, meta_category_id} ->
-      if String.starts_with?(token, prefix <> "_"), do: meta_category_id
-    end)
-  end
 end
 
 Align.CategoryMappings.run()

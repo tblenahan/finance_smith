@@ -18,11 +18,15 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
   1. Ensure the PlaidItem has `user.household` loaded; derive `household_id`.
   2. Build a lookup map of Plaid account ID -> internal account UUID.
   3. Resolve a `%{source_category_token => meta_category_id}` lookup for all
-     unique category tokens present in the payload batch:
+     unique category tokens present in the payload batch via
+     `CategoryResolution.resolve_tokens!/2`:
      - Batch-load existing `CategoryMapping` rows in one query.
-     - Bulk-create missing mappings (via `:create_system` + upsert) under the
-       household's "Uncategorized" `MetaCategory`, creating that category first
-       if it does not yet exist.
+     - For missing tokens, try prefix matching against the 16 Plaid primary
+       tokens first (e.g. `FOOD_AND_DRINK_GROCERIES` → `FOOD_AND_DRINK`).
+     - Tokens with no prefix match fall back to the household's "Uncategorized"
+       `MetaCategory`, creating it first if needed.
+     - Bulk-upsert new mappings, then re-read from DB so the lookup reflects
+       the actual DB winner (race-safe under concurrent Oban workers).
   4. Run all transaction DB operations inside a single Repo transaction:
      - `added` / `modified` → upsert on `:unique_plaid_id`, stamping
        `meta_category_id` from the resolved lookup, collecting
@@ -41,7 +45,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   alias FinanceSmith.DataLake.{B2, KeyBuilder}
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.{CategoryMapping, CategoryResolution, PlaidItem, Transaction}
+  alias FinanceSmith.Banking.{CategoryResolution, PlaidItem, Transaction}
 
   require Ash.Query
   require Logger
@@ -135,64 +139,8 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   # --- Category mapping resolution ------------------------------------------
 
-  @plaid_primary_tokens ~w(
-    INCOME TRANSFER_IN TRANSFER_OUT LOAN_PAYMENTS BANK_FEES
-    ENTERTAINMENT FOOD_AND_DRINK GENERAL_MERCHANDISE HOME_IMPROVEMENT
-    MEDICAL PERSONAL_CARE GENERAL_SERVICES GOVERNMENT_AND_NON_PROFIT
-    TRANSPORTATION TRAVEL RENT_AND_UTILITIES
-  )
-
-  # Returns %{source_category_token => meta_category_id} for every unique token
-  # found in the payload batch. For tokens with no existing mapping, prefix
-  # matching against the 16 known Plaid primary tokens is tried first. Tokens
-  # that match a primary are mapped to that primary's MetaCategory. Remaining
-  # tokens fall back to the household's "Uncategorized" MetaCategory. All new
-  # mappings are persisted as unreviewed for future use.
   defp resolve_category_mappings!(payload, household_id) do
-    tokens = category_tokens(payload)
-
-    if Enum.empty?(tokens) do
-      %{}
-    else
-      existing =
-        CategoryMapping
-        |> Ash.Query.filter(
-          household_id == ^household_id and
-            provider == "plaid" and
-            source_category_token in ^tokens
-        )
-        |> Ash.read!(authorize?: false)
-
-      existing_by_token = Map.new(existing, &{&1.source_category_token, &1.meta_category_id})
-
-      missing_tokens = Enum.reject(tokens, &Map.has_key?(existing_by_token, &1))
-
-      created_by_token =
-        if Enum.empty?(missing_tokens) do
-          %{}
-        else
-          primary_lookup = load_primary_mappings(household_id)
-          fallback = CategoryResolution.ensure_fallback_meta_category!(household_id)
-
-          resolved =
-            Map.new(missing_tokens, fn token ->
-              case find_primary_prefix(token, primary_lookup) do
-                nil -> {token, fallback.id}
-                meta_category_id -> {token, meta_category_id}
-              end
-            end)
-
-          resolved
-          |> Enum.group_by(fn {_token, mcid} -> mcid end, fn {token, _mcid} -> token end)
-          |> Enum.each(fn {meta_category_id, group_tokens} ->
-            CategoryResolution.bulk_create_mappings!(group_tokens, household_id, meta_category_id)
-          end)
-
-          resolved
-        end
-
-      Map.merge(existing_by_token, created_by_token)
-    end
+    CategoryResolution.resolve_tokens!(category_tokens(payload), household_id)
   end
 
   defp category_tokens(payload) do
@@ -212,27 +160,6 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     end
   end
 
-  # Loads the household's existing CategoryMapping rows for the 16 known Plaid
-  # primary tokens in a single query. Returns %{primary_token => meta_category_id}.
-  defp load_primary_mappings(household_id) do
-    CategoryMapping
-    |> Ash.Query.filter(
-      household_id == ^household_id and
-        provider == "plaid" and
-        source_category_token in ^@plaid_primary_tokens
-    )
-    |> Ash.read!(authorize?: false)
-    |> Map.new(&{&1.source_category_token, &1.meta_category_id})
-  end
-
-  # Returns the meta_category_id of the primary token whose prefix (plus "_")
-  # matches the given detailed token, or nil if no primary matches.
-  defp find_primary_prefix(token, primary_lookup) do
-    Enum.find_value(primary_lookup, fn {prefix, meta_category_id} ->
-      if String.starts_with?(token, prefix <> "_"), do: meta_category_id
-    end)
-  end
-
   # --- Transaction writes ---------------------------------------------------
 
   defp collect_upsert_notifications(acc, transactions, account_lookup, category_lookup) do
@@ -245,7 +172,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
           {_record, notifs} =
             Transaction
-            |> Ash.Changeset.for_create(:create, attrs, authorize?: false)
+            |> Ash.Changeset.for_create(:create, attrs)
             |> Ash.create!(
               upsert?: true,
               upsert_identity: :unique_plaid_id,

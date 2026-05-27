@@ -5,52 +5,16 @@
 # personal_finance_category IS NOT NULL. A second pass finds zero candidates
 # and exits cleanly.
 #
+# Resolution order (matches live sync via CategoryResolution.resolve_tokens!/2):
+#   1. Detailed token matching a known Plaid primary prefix → primary MetaCategory.
+#   2. No prefix match → "Uncategorized" MetaCategory (created on first use).
+#
 # Usage:
 #   mix run priv/repo/backfill_plaid_transaction_categories.exs
 
-defmodule Backfill.CategoryResolver do
-  @moduledoc false
-
-  require Ash.Query
-
-  alias FinanceSmith.Banking.{CategoryMapping, CategoryResolution}
-
-  @doc """
-  Returns `{%{token => meta_category_id}, mappings_created_count}` for the given
-  unique `tokens` list scoped to `household_id`. Missing tokens are lazily
-  registered as unreviewed mappings pointing to "Uncategorized".
-  """
-  def resolve_mappings!(tokens, household_id) do
-    existing =
-      CategoryMapping
-      |> Ash.Query.filter(
-        household_id == ^household_id and
-          provider == "plaid" and
-          source_category_token in ^tokens
-      )
-      |> Ash.read!(authorize?: false)
-
-    existing_by_token = Map.new(existing, &{&1.source_category_token, &1.meta_category_id})
-
-    missing_tokens = Enum.reject(tokens, &Map.has_key?(existing_by_token, &1))
-
-    {created_by_token, created_count} =
-      if Enum.empty?(missing_tokens) do
-        {%{}, 0}
-      else
-        fallback = CategoryResolution.ensure_fallback_meta_category!(household_id)
-        CategoryResolution.bulk_create_mappings!(missing_tokens, household_id, fallback.id)
-        {Map.new(missing_tokens, &{&1, fallback.id}), length(missing_tokens)}
-      end
-
-    {Map.merge(existing_by_token, created_by_token), created_count}
-  end
-end
-
 require Ash.Query
 
-alias Backfill.CategoryResolver
-alias FinanceSmith.Banking.Transaction
+alias FinanceSmith.Banking.{CategoryResolution, Transaction}
 alias FinanceSmith.Identity.Household
 
 households = Ash.read!(Household, authorize?: false)
@@ -80,7 +44,7 @@ else
           |> Enum.map(& &1.personal_finance_category)
           |> Enum.uniq()
 
-        {lookup, mappings_created} = CategoryResolver.resolve_mappings!(tokens, household.id)
+        lookup = CategoryResolution.resolve_tokens!(tokens, household.id)
 
         updated =
           candidates
@@ -105,7 +69,7 @@ else
           end)
 
         IO.puts(
-          "  candidates: #{length(candidates)} | unique tokens: #{length(tokens)} | mappings created: #{mappings_created} | transactions updated: #{updated}"
+          "  candidates: #{length(candidates)} | unique tokens: #{length(tokens)} | transactions updated: #{updated}"
         )
 
         total_acc + updated

@@ -73,7 +73,7 @@ Two Ash domains are registered in [`config/config.exs`](../config/config.exs):
 
 **Aggregates and KPIs:** `User` and `Household` expose `total_assets`, `total_liabilities`, `outflow_30d`, `inflow_30d`, and active Plaid stream counts; `PlaidItem` exposes per-item KPI sums/counts for dashboard tiles. Calculations such as `total_net_worth` are expression-based on loaded aggregates.
 
-**`Account`:** `status` (`AccountStatus`), optional `duplicate_of` self-reference for deduplication. **`Transaction`:** custom indexes (including GIN on `metadata`, category and date composites); read actions `:list` (keyset, filters), `:for_chart` (capped row window for charts), `:categories` (distinct categories for filter dropdowns).
+**`Account`:** `status` (`AccountStatus`), optional `duplicate_of` self-reference for deduplication. **`Transaction`:** custom indexes (including GIN on `metadata`, category and date composites); read actions `:list` (keyset, filters) and `:for_chart` (capped row window for charts). **`MetaCategory`** and **`CategoryMapping`** provide the household-scoped taxonomy; filter dropdowns are populated from `MetaCategory` rather than from `Transaction` directly.
 
 **Banking** code interfaces in [`banking.ex`](../lib/finance_smith/banking.ex):
 
@@ -87,7 +87,7 @@ Two Ash domains are registered in [`config/config.exs`](../config/config.exs):
 | `get_plaid_item_kpis/1` | `PlaidItem` primary `:read` with KPI aggregate loads — **includes decryptable `access_token`; use only in system contexts** |
 | `get_account_by_id/1` | `Account` read, `get_by: [:id]` |
 | `list_transactions/1` | `Transaction :list` (keyset, filterable) |
-| `list_transaction_categories/1` | `Transaction :categories` |
+| `list_meta_categories/1` | `MetaCategory :read` — household-scoped category list for filter dropdowns |
 | `list_transactions_for_chart/1` | `Transaction :for_chart` |
 
 **Identity** code interfaces in [`identity.ex`](../lib/finance_smith/identity.ex):
