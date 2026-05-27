@@ -87,7 +87,7 @@ defmodule FinanceSmith.Banking.Transaction do
       argument :user_id, :uuid, allow_nil?: true
       argument :date_from, :date, allow_nil?: true
       argument :date_to, :date, allow_nil?: true
-      argument :category, :string, allow_nil?: true
+      argument :meta_category_id, :uuid, allow_nil?: true
       argument :search, :string, allow_nil?: true
 
       pagination keyset?: true,
@@ -98,7 +98,7 @@ defmodule FinanceSmith.Banking.Transaction do
 
       prepare build(
                 sort: [date: :desc, inserted_at: :desc],
-                load: [:account]
+                load: [:account, :meta_category]
               )
 
       filter expr(is_nil(^arg(:account_id)) or account_id == ^arg(:account_id))
@@ -109,7 +109,7 @@ defmodule FinanceSmith.Banking.Transaction do
 
       filter expr(is_nil(^arg(:date_to)) or date <= ^arg(:date_to))
 
-      filter expr(is_nil(^arg(:category)) or personal_finance_category == ^arg(:category))
+      filter expr(is_nil(^arg(:meta_category_id)) or meta_category_id == ^arg(:meta_category_id))
 
       filter expr(
                is_nil(^arg(:search)) or

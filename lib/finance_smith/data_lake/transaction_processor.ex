@@ -145,9 +145,19 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   # --- Category mapping resolution ------------------------------------------
 
+  @plaid_primary_tokens ~w(
+    INCOME TRANSFER_IN TRANSFER_OUT LOAN_PAYMENTS BANK_FEES
+    ENTERTAINMENT FOOD_AND_DRINK GENERAL_MERCHANDISE HOME_IMPROVEMENT
+    MEDICAL PERSONAL_CARE GENERAL_SERVICES GOVERNMENT_AND_NON_PROFIT
+    TRANSPORTATION TRAVEL RENT_AND_UTILITIES
+  )
+
   # Returns %{source_category_token => meta_category_id} for every unique token
-  # found in the payload batch. Missing tokens are lazily created as unreviewed
-  # mappings pointing to the household's "Uncategorized" MetaCategory.
+  # found in the payload batch. For tokens with no existing mapping, prefix
+  # matching against the 16 known Plaid primary tokens is tried first. Tokens
+  # that match a primary are mapped to that primary's MetaCategory. Remaining
+  # tokens fall back to the household's "Uncategorized" MetaCategory. All new
+  # mappings are persisted as unreviewed for future use.
   defp resolve_category_mappings!(payload, household_id) do
     tokens = category_tokens(payload)
 
@@ -171,9 +181,24 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
         if Enum.empty?(missing_tokens) do
           %{}
         else
+          primary_lookup = load_primary_mappings(household_id)
           fallback = ensure_fallback_meta_category!(household_id)
-          bulk_create_mappings!(missing_tokens, household_id, fallback.id)
-          Map.new(missing_tokens, &{&1, fallback.id})
+
+          resolved =
+            Map.new(missing_tokens, fn token ->
+              case find_primary_prefix(token, primary_lookup) do
+                nil -> {token, fallback.id}
+                meta_category_id -> {token, meta_category_id}
+              end
+            end)
+
+          resolved
+          |> Enum.group_by(fn {_token, mcid} -> mcid end, fn {token, _mcid} -> token end)
+          |> Enum.each(fn {meta_category_id, group_tokens} ->
+            bulk_create_mappings!(group_tokens, household_id, meta_category_id)
+          end)
+
+          resolved
         end
 
       Map.merge(existing_by_token, created_by_token)
@@ -221,6 +246,27 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
       meta_category ->
         meta_category
     end
+  end
+
+  # Loads the household's existing CategoryMapping rows for the 16 known Plaid
+  # primary tokens in a single query. Returns %{primary_token => meta_category_id}.
+  defp load_primary_mappings(household_id) do
+    CategoryMapping
+    |> Ash.Query.filter(
+      household_id == ^household_id and
+        provider == "plaid" and
+        source_category_token in ^@plaid_primary_tokens
+    )
+    |> Ash.read!(authorize?: false)
+    |> Map.new(&{&1.source_category_token, &1.meta_category_id})
+  end
+
+  # Returns the meta_category_id of the primary token whose prefix (plus "_")
+  # matches the given detailed token, or nil if no primary matches.
+  defp find_primary_prefix(token, primary_lookup) do
+    Enum.find_value(primary_lookup, fn {prefix, meta_category_id} ->
+      if String.starts_with?(token, prefix <> "_"), do: meta_category_id
+    end)
   end
 
   # Settles all missing mappings in one DB pass. On concurrent conflict
