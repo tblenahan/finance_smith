@@ -54,30 +54,13 @@ defmodule FinanceSmith.Banking.Transaction do
       argument :user_id, :uuid, allow_nil?: true
 
       prepare build(
-                select: [:date, :amount, :meta_category_id],
-                load: [:meta_category],
+                select: [:date, :amount],
+                load: [:meta_category_name],
                 sort: [date: :asc],
                 limit: 10_000
               )
 
       filter expr(is_nil(^arg(:date_from)) or date >= ^arg(:date_from))
-      filter expr(is_nil(^arg(:plaid_item_id)) or account.plaid_item_id == ^arg(:plaid_item_id))
-      filter expr(is_nil(^arg(:user_id)) or account.plaid_item.user_id == ^arg(:user_id))
-    end
-
-    read :categories do
-      argument :account_id, :uuid, allow_nil?: true
-      argument :plaid_item_id, :uuid, allow_nil?: true
-      argument :user_id, :uuid, allow_nil?: true
-
-      prepare build(
-                select: [:personal_finance_category],
-                distinct: [:personal_finance_category],
-                sort: [personal_finance_category: :asc]
-              )
-
-      filter expr(not is_nil(personal_finance_category))
-      filter expr(is_nil(^arg(:account_id)) or account_id == ^arg(:account_id))
       filter expr(is_nil(^arg(:plaid_item_id)) or account.plaid_item_id == ^arg(:plaid_item_id))
       filter expr(is_nil(^arg(:user_id)) or account.plaid_item.user_id == ^arg(:user_id))
     end
@@ -190,6 +173,10 @@ defmodule FinanceSmith.Banking.Transaction do
     belongs_to :meta_category, FinanceSmith.Banking.MetaCategory do
       public? true
     end
+  end
+
+  calculations do
+    calculate :meta_category_name, :string, expr(meta_category.name)
   end
 
   identities do

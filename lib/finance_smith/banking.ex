@@ -28,8 +28,6 @@ defmodule FinanceSmith.Banking do
     resource FinanceSmith.Banking.Transaction do
       define :list_transactions, action: :list
 
-      define :list_transaction_categories, action: :categories
-
       # Lightweight read for chart rendering — no pagination.
       define :list_transactions_for_chart, action: :for_chart
     end

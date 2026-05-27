@@ -54,12 +54,18 @@ else
       if is_nil(existing) do
         meta_category =
           MetaCategory
-          |> Ash.Changeset.for_create(:create, %{name: default_name})
-          |> Ash.Changeset.force_change_attribute(:household_id, household.id)
-          |> Ash.create!(authorize?: false)
+          |> Ash.Changeset.for_create(:create_system, %{
+            name: default_name,
+            household_id: household.id
+          })
+          |> Ash.create!(
+            authorize?: false,
+            upsert?: true,
+            upsert_identity: :unique_name_per_household
+          )
 
         CategoryMapping
-        |> Ash.Changeset.for_create(:create, %{
+        |> Ash.Changeset.for_create(:create_system, %{
           provider: "plaid",
           source_category_token: token,
           household_id: household.id,

@@ -42,7 +42,7 @@ defmodule FinanceSmith.Banking.MetaCategory do
     end
 
     policy action(:create) do
-      authorize_if actor_present()
+      authorize_if expr(not is_nil(^actor(:household_id)))
     end
 
     # Household members may rename or delete their own meta-categories.
@@ -57,7 +57,7 @@ defmodule FinanceSmith.Banking.MetaCategory do
     attribute :name, :string do
       allow_nil? false
       public? true
-      constraints min_length: 4
+      constraints min_length: 1
     end
 
     create_timestamp :inserted_at

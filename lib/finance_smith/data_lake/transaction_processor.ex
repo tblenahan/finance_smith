@@ -41,7 +41,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   alias FinanceSmith.DataLake.{B2, KeyBuilder}
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.{CategoryMapping, MetaCategory, PlaidItem, Transaction}
+  alias FinanceSmith.Banking.{CategoryMapping, CategoryResolution, PlaidItem, Transaction}
 
   require Ash.Query
   require Logger
@@ -121,21 +121,11 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   # --- Household context normalization --------------------------------------
 
-  # Mirrors the pattern in Uploader.ensure_household_loaded/1 but raises on
-  # failure rather than returning an error tuple, since the processor has no
-  # recovery path if household context cannot be established.
-  defp ensure_user_household_loaded!(%PlaidItem{user: %Ash.NotLoaded{}} = item) do
+  # Raises on failure — the processor has no recovery path if household context
+  # cannot be established. `Ash.load!/3` is idempotent for already-loaded fields.
+  defp ensure_user_household_loaded!(%PlaidItem{} = item) do
     Ash.load!(item, [user: :household], authorize?: false)
   end
-
-  defp ensure_user_household_loaded!(%PlaidItem{user: user} = item) when not is_nil(user) do
-    case user do
-      %{household: %Ash.NotLoaded{}} -> Ash.load!(item, [user: :household], authorize?: false)
-      _ -> item
-    end
-  end
-
-  defp ensure_user_household_loaded!(%PlaidItem{} = item), do: item
 
   # --- Account lookup -------------------------------------------------------
 
@@ -182,7 +172,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
           %{}
         else
           primary_lookup = load_primary_mappings(household_id)
-          fallback = ensure_fallback_meta_category!(household_id)
+          fallback = CategoryResolution.ensure_fallback_meta_category!(household_id)
 
           resolved =
             Map.new(missing_tokens, fn token ->
@@ -195,7 +185,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
           resolved
           |> Enum.group_by(fn {_token, mcid} -> mcid end, fn {token, _mcid} -> token end)
           |> Enum.each(fn {meta_category_id, group_tokens} ->
-            bulk_create_mappings!(group_tokens, household_id, meta_category_id)
+            CategoryResolution.bulk_create_mappings!(group_tokens, household_id, meta_category_id)
           end)
 
           resolved
@@ -222,32 +212,6 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     end
   end
 
-  # Resolves or creates the household-level fallback MetaCategory named
-  # "Uncategorized". Uses upsert to be safe under concurrent Oban workers.
-  defp ensure_fallback_meta_category!(household_id) do
-    existing =
-      MetaCategory
-      |> Ash.Query.filter(household_id == ^household_id and name == "Uncategorized")
-      |> Ash.read_one!(authorize?: false)
-
-    case existing do
-      nil ->
-        MetaCategory
-        |> Ash.Changeset.for_create(:create_system, %{
-          name: "Uncategorized",
-          household_id: household_id
-        })
-        |> Ash.create!(
-          authorize?: false,
-          upsert?: true,
-          upsert_identity: :unique_name_per_household
-        )
-
-      meta_category ->
-        meta_category
-    end
-  end
-
   # Loads the household's existing CategoryMapping rows for the 16 known Plaid
   # primary tokens in a single query. Returns %{primary_token => meta_category_id}.
   defp load_primary_mappings(household_id) do
@@ -267,37 +231,6 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     Enum.find_value(primary_lookup, fn {prefix, meta_category_id} ->
       if String.starts_with?(token, prefix <> "_"), do: meta_category_id
     end)
-  end
-
-  # Settles all missing mappings in one DB pass. On concurrent conflict
-  # (two workers racing on the same token), the upsert touches only
-  # :updated_at to avoid overwriting any manual remapping made between
-  # our pre-load check and the bulk write.
-  defp bulk_create_mappings!(tokens, household_id, meta_category_id) do
-    rows =
-      Enum.map(tokens, fn token ->
-        %{
-          household_id: household_id,
-          meta_category_id: meta_category_id,
-          provider: "plaid",
-          source_category_token: token,
-          unreviewed: true
-        }
-      end)
-
-    %Ash.BulkResult{status: status} =
-      Ash.bulk_create(rows, CategoryMapping, :create_system,
-        authorize?: false,
-        upsert?: true,
-        upsert_identity: :unique_mapping_per_household,
-        upsert_fields: [:updated_at]
-      )
-
-    if status == :error do
-      raise "[TransactionProcessor] Failed to bulk create category mappings for household=#{household_id}"
-    end
-
-    :ok
   end
 
   # --- Transaction writes ---------------------------------------------------

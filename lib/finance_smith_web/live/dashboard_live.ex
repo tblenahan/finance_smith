@@ -526,7 +526,7 @@ defmodule FinanceSmithWeb.DashboardLive do
     |> Enum.sort_by(& &1.value, :desc)
   end
 
-  defp meta_category_label(%{meta_category: %{name: name}}) when is_binary(name), do: name
+  defp meta_category_label(%{meta_category_name: name}) when is_binary(name), do: name
   defp meta_category_label(_), do: "Uncategorized"
 
   defp push_chart_data(socket, timeframe, scope) do

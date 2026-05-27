@@ -6,6 +6,7 @@ defmodule FinanceSmithWeb.DashboardLiveTest do
   import Mox
 
   alias FinanceSmith.Banking.PlaidItem
+  alias FinanceSmith.BankingFixtures
   alias FinanceSmith.Identity
   alias FinanceSmith.Test.PlaidTestHelpers
 
@@ -149,6 +150,87 @@ defmodule FinanceSmithWeb.DashboardLiveTest do
         })
 
       assert html =~ "The connection could not be established"
+    end
+  end
+
+  describe "transaction table pagination" do
+    # Seeds 30 transactions (more than the default page size of 25) and verifies
+    # that the Next/Previous links carry distinct per-record keyset cursors rather
+    # than the stale request cursors stored on the page struct.
+    test "Next link advances to page 2 with distinct rows, Previous returns to page 1", %{
+      conn: conn
+    } do
+      user = register_user!()
+      plaid_item = BankingFixtures.create_plaid_item!(user)
+      account = BankingFixtures.create_account!(plaid_item)
+
+      # Spread across 30 distinct past dates so the default sort is stable and
+      # rows fall outside the 30-day default window — we clear the filter below.
+      for i <- 1..30 do
+        BankingFixtures.create_transaction!(account, %{
+          date: Date.add(Date.utc_today(), -(i + 30)),
+          amount: i * 100,
+          merchant_name: "Merchant #{i}"
+        })
+      end
+
+      # Clear the date filter so all 30 rows are visible.
+      base_conn = log_in_user(conn, user)
+
+      {:ok, view, html} = live(base_conn, "/dashboard?date_from=2000-01-01")
+
+      # Page 1: verify we got 25 rows and a working Next link.
+      assert html =~ "Merchant"
+
+      next_href =
+        Regex.run(~r/href="([^"]*after=[^"]*)"[^>]*>[\s\S]*?Next/, html)
+        |> case do
+          [_, href] -> String.replace(href, "&amp;", "&")
+          _ -> nil
+        end
+
+      assert is_binary(next_href),
+             "Expected a Next link with an `after=` cursor on page 1."
+
+      # Count page 1 rows via the tr count in tbody.
+      page1_row_count = length(Regex.scan(~r/<tr[^>]*class="hover:bg-gray-900/, html))
+      assert page1_row_count == 25, "Expected 25 rows on page 1, got #{page1_row_count}"
+
+      # Navigate to page 2 via the keyset cursor.
+      {:ok, _view2, html2} = live(base_conn, next_href)
+
+      page2_row_count = length(Regex.scan(~r/<tr[^>]*class="hover:bg-gray-900/, html2))
+      assert page2_row_count == 5, "Expected 5 remaining rows on page 2, got #{page2_row_count}"
+
+      # Page 2 rows must not overlap with page 1 rows.
+      page1_merchants = Regex.scan(~r/Merchant \d+/, html) |> List.flatten() |> MapSet.new()
+      page2_merchants = Regex.scan(~r/Merchant \d+/, html2) |> List.flatten() |> MapSet.new()
+
+      overlap = MapSet.intersection(page1_merchants, page2_merchants)
+
+      assert MapSet.size(overlap) == 0,
+             "Pages 1 and 2 must not share rows. Overlap: #{inspect(overlap)}"
+
+      # Page 2 must expose a Previous link with a `before=` cursor.
+      prev_href =
+        Regex.run(~r/href="([^"]*before=[^"]*)"[^>]*>[\s\S]*?Previous/, html2)
+        |> case do
+          [_, href] -> String.replace(href, "&amp;", "&")
+          _ -> nil
+        end
+
+      assert is_binary(prev_href),
+             "Expected a Previous link with a `before=` cursor on page 2"
+
+      # Following Previous must return a full page of 25 rows.
+      {:ok, _view3, html3} = live(base_conn, prev_href)
+
+      page1_return_row_count = length(Regex.scan(~r/<tr[^>]*class="hover:bg-gray-900/, html3))
+
+      assert page1_return_row_count == 25,
+             "Following Previous from page 2 must return 25 rows, got #{page1_return_row_count}"
+
+      _ = view
     end
   end
 

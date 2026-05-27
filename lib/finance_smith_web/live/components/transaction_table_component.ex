@@ -179,9 +179,9 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
 
       <%!-- Keyset pagination bar --%>
       <div class="flex items-center justify-between px-4 py-3 border-t border-gray-800 bg-black">
-        <%= if show_previous?(@params, @page) do %>
+        <%= if show_previous?(@page) do %>
           <.link
-            patch={build_url(@base_url, %{@params | before_cursor: @page.before, after_cursor: nil})}
+            patch={build_url(@base_url, %{@params | before_cursor: page_first_keyset(@page), after_cursor: nil})}
             class="font-mono text-[10px] uppercase tracking-widest px-3 py-1.5 rounded border border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-200 transition-colors"
           >
             ← Previous
@@ -198,9 +198,9 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
           <% end %>
         </span>
 
-        <%= if @page && @page.more? do %>
+        <%= if show_next?(@page) do %>
           <.link
-            patch={build_url(@base_url, %{@params | after_cursor: @page.after, before_cursor: nil})}
+            patch={build_url(@base_url, %{@params | after_cursor: page_last_keyset(@page), before_cursor: nil})}
             class="font-mono text-[10px] uppercase tracking-widest px-3 py-1.5 rounded border border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-200 transition-colors"
           >
             Next →
@@ -285,12 +285,35 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
     params.search || params.date_from || params.date_to || params.meta_category_id
   end
 
-  # Only show "Previous" when the user has actually paged forward or backward,
-  # because keyset pages always expose a `before` cursor once results exist.
-  defp show_previous?(_params, nil), do: false
-  defp show_previous?(_params, %{before: nil}), do: false
-  defp show_previous?(%{after_cursor: nil, before_cursor: nil}, _page), do: false
-  defp show_previous?(_params, _page), do: true
+  # Pagination direction is encoded in which cursor field Ash populates on the
+  # returned page struct (`page.before` when navigating backwards, `page.after`
+  # when navigating forwards or on the first page).
+  #
+  # Backwards navigation: Previous exists only when there are more rows behind
+  # the cursor (`more?`). Next always exists (we came from it).
+  defp show_previous?(%Ash.Page.Keyset{before: b, more?: more?}) when not is_nil(b), do: more?
+  # Forwards navigation / first page: Previous exists iff we used an after-cursor.
+  defp show_previous?(%Ash.Page.Keyset{after: a}) when not is_nil(a), do: true
+  defp show_previous?(%Ash.Page.Keyset{}), do: false
+  defp show_previous?(_), do: false
+
+  # Backwards navigation: Next always exists (we came from it).
+  defp show_next?(%Ash.Page.Keyset{before: b}) when not is_nil(b), do: true
+  # Forwards navigation / first page: Next exists only when there are more rows.
+  defp show_next?(%Ash.Page.Keyset{more?: more?}), do: more?
+  defp show_next?(_), do: false
+
+  # Per-record keysets live at `record.__metadata__.keyset`, not on the page struct.
+  # `Ash.Page.Keyset.before` / `.after` hold the *input* cursors, not output ones.
+  defp page_first_keyset(%{results: [_ | _] = results}),
+    do: List.first(results).__metadata__.keyset
+
+  defp page_first_keyset(_), do: nil
+
+  defp page_last_keyset(%{results: [_ | _] = results}),
+    do: List.last(results).__metadata__.keyset
+
+  defp page_last_keyset(_), do: nil
 
   # --- Display helpers --------------------------------------------------------
 

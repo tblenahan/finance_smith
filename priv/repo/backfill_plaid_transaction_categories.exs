@@ -5,9 +5,6 @@
 # personal_finance_category IS NOT NULL. A second pass finds zero candidates
 # and exits cleanly.
 #
-# The category mapping resolution logic is an inline copy of the private helpers
-# in TransactionProcessor so that the ingestion module is not modified.
-#
 # Usage:
 #   mix run priv/repo/backfill_plaid_transaction_categories.exs
 
@@ -16,7 +13,7 @@ defmodule Backfill.CategoryResolver do
 
   require Ash.Query
 
-  alias FinanceSmith.Banking.{CategoryMapping, MetaCategory}
+  alias FinanceSmith.Banking.{CategoryMapping, CategoryResolution}
 
   @doc """
   Returns `{%{token => meta_category_id}, mappings_created_count}` for the given
@@ -41,63 +38,12 @@ defmodule Backfill.CategoryResolver do
       if Enum.empty?(missing_tokens) do
         {%{}, 0}
       else
-        fallback = ensure_fallback_meta_category!(household_id)
-        bulk_create_mappings!(missing_tokens, household_id, fallback.id)
+        fallback = CategoryResolution.ensure_fallback_meta_category!(household_id)
+        CategoryResolution.bulk_create_mappings!(missing_tokens, household_id, fallback.id)
         {Map.new(missing_tokens, &{&1, fallback.id}), length(missing_tokens)}
       end
 
     {Map.merge(existing_by_token, created_by_token), created_count}
-  end
-
-  defp ensure_fallback_meta_category!(household_id) do
-    existing =
-      MetaCategory
-      |> Ash.Query.filter(household_id == ^household_id and name == "Uncategorized")
-      |> Ash.read_one!(authorize?: false)
-
-    case existing do
-      nil ->
-        MetaCategory
-        |> Ash.Changeset.for_create(:create_system, %{
-          name: "Uncategorized",
-          household_id: household_id
-        })
-        |> Ash.create!(
-          authorize?: false,
-          upsert?: true,
-          upsert_identity: :unique_name_per_household
-        )
-
-      meta_category ->
-        meta_category
-    end
-  end
-
-  defp bulk_create_mappings!(tokens, household_id, meta_category_id) do
-    rows =
-      Enum.map(tokens, fn token ->
-        %{
-          household_id: household_id,
-          meta_category_id: meta_category_id,
-          provider: "plaid",
-          source_category_token: token,
-          unreviewed: true
-        }
-      end)
-
-    %Ash.BulkResult{status: status} =
-      Ash.bulk_create(rows, CategoryMapping, :create_system,
-        authorize?: false,
-        upsert?: true,
-        upsert_identity: :unique_mapping_per_household,
-        upsert_fields: [:updated_at]
-      )
-
-    if status == :error do
-      raise "[Backfill] Failed to bulk create category mappings for household=#{household_id}"
-    end
-
-    :ok
   end
 end
 

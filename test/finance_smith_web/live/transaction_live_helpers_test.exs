@@ -141,6 +141,48 @@ defmodule FinanceSmithWeb.TransactionLiveHelpersTest do
       assert {:ok, %Ash.Page.Keyset{}} =
                TransactionLiveHelpers.fetch_transactions(user, params)
     end
+
+    test "sorts asc with nil meta_category_id without error and places nulls last" do
+      user = register_user!()
+      cat = seed_meta_category!(user.household_id, "Alpha")
+
+      _with_category = seed_transaction!(user, meta_category_id: cat.id)
+      _without_category = seed_transaction!(user)
+
+      params = %{
+        TransactionLiveHelpers.default_tx_params()
+        | sort_by: "category",
+          sort_dir: "asc"
+      }
+
+      assert {:ok, %Ash.Page.Keyset{results: [first | _] = results}} =
+               TransactionLiveHelpers.fetch_transactions(user, params)
+
+      assert length(results) == 2
+      # The categorized row ("Alpha") sorts before nil in ascending order.
+      assert first.meta_category_id != nil
+    end
+
+    test "sorts desc with nil meta_category_id without error and places nulls first" do
+      user = register_user!()
+      cat = seed_meta_category!(user.household_id, "Zebra")
+
+      _with_category = seed_transaction!(user, meta_category_id: cat.id)
+      _without_category = seed_transaction!(user)
+
+      params = %{
+        TransactionLiveHelpers.default_tx_params()
+        | sort_by: "category",
+          sort_dir: "desc"
+      }
+
+      assert {:ok, %Ash.Page.Keyset{results: [first | _] = results}} =
+               TransactionLiveHelpers.fetch_transactions(user, params)
+
+      assert length(results) == 2
+      # In descending order, nil sorts before any named category (nils_first for desc).
+      assert is_nil(first.meta_category_id)
+    end
   end
 
   describe "list_categories/2" do
