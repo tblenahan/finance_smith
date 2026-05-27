@@ -69,7 +69,8 @@ else
           provider: "plaid",
           source_category_token: token,
           household_id: household.id,
-          meta_category_id: meta_category.id
+          meta_category_id: meta_category.id,
+          unreviewed: false
         })
         |> Ash.create!(authorize?: false)
 

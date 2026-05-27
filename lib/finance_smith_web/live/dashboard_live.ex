@@ -527,6 +527,7 @@ defmodule FinanceSmithWeb.DashboardLive do
   end
 
   defp meta_category_label(%{meta_category_name: name}) when is_binary(name), do: name
+  defp meta_category_label(%{meta_category_id: nil}), do: "—"
   defp meta_category_label(_), do: "Uncategorized"
 
   defp push_chart_data(socket, timeframe, scope) do

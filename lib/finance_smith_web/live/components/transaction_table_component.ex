@@ -334,6 +334,7 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
   end
 
   defp meta_category_name(%{meta_category: %{name: name}}) when is_binary(name), do: name
+  defp meta_category_name(%{meta_category_id: nil}), do: "—"
   defp meta_category_name(_), do: "Uncategorized"
 
   defp nilify(""), do: nil

@@ -149,7 +149,10 @@ defmodule FinanceSmithWeb.ConnectionLive do
         nil
 
       {:error, reason} ->
-        Logger.warning("[ConnectionLive] get_plaid_item_by_id failed", error: inspect(reason))
+        Logger.warning("[ConnectionLive] get_plaid_item_summary_by_id failed",
+          error: inspect(reason)
+        )
+
         nil
     end
   end
