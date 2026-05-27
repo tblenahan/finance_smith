@@ -28,10 +28,20 @@ defmodule FinanceSmith.Banking do
     resource FinanceSmith.Banking.Transaction do
       define :list_transactions, action: :list
 
-      define :list_transaction_categories, action: :categories
-
       # Lightweight read for chart rendering — no pagination.
       define :list_transactions_for_chart, action: :for_chart
+    end
+
+    resource FinanceSmith.Banking.MetaCategory do
+      define :list_meta_categories, action: :read
+      define :get_meta_category_by_id, action: :read, get_by: [:id]
+      define :update_meta_category, action: :update
+      define :destroy_meta_category, action: :destroy
+    end
+
+    resource FinanceSmith.Banking.CategoryMapping do
+      define :list_category_mappings, action: :read
+      define :destroy_category_mapping, action: :destroy
     end
   end
 end

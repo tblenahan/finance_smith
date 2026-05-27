@@ -1,7 +1,6 @@
 defmodule FinanceSmithWeb.TransactionTableComponent do
   use FinanceSmithWeb, :live_component
 
-  alias FinanceSmith.Banking.PlaidCategories
   alias FinanceSmithWeb.MoneyFormat
 
   @doc """
@@ -12,8 +11,8 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
     * `:page`       - An `Ash.Page.Keyset` result (or `nil` when loading).
     * `:params`     - A map of parsed filter/sort state (from the parent's `handle_params`).
     * `:base_url`   - The parent route path used to build patch URLs (e.g. `"/dashboard"`).
-    * `:categories` - A list of `personal_finance_category` strings from the DB for the
-                      current scope (household, connection, or account).
+    * `:categories` - A list of MetaCategory structs (with `:id` and `:name`) for the
+                      actor's household, used to populate the filter dropdown.
 
   ## Optional assigns
 
@@ -72,9 +71,9 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
           <.input
             type="select"
             name="category"
-            value={@params.category}
+            value={@params.meta_category_id}
             prompt="All Categories"
-            options={Enum.map(@categories, &{PlaidCategories.format(&1), &1})}
+            options={Enum.map(@categories, &{&1.name, &1.id})}
             class="bg-gray-900 border border-gray-800 rounded text-gray-400 font-mono text-[10px] uppercase tracking-wider px-2 py-1.5 focus:outline-none focus:border-gray-600 w-64 max-w-full"
           />
 
@@ -110,8 +109,13 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
                   Merchant {sort_indicator(@params, "merchant_name")}
                 </.link>
               </th>
-              <th scope="col" class="px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-gray-500">
-                Category
+              <th scope="col" class="px-4 py-3">
+                <.link
+                  patch={sort_url(@base_url, @params, "category")}
+                  class="flex items-center gap-1 font-mono text-[10px] uppercase tracking-widest text-gray-500 hover:text-gray-300 transition-colors"
+                >
+                  Category {sort_indicator(@params, "category")}
+                </.link>
               </th>
               <%= if @scope != :account do %>
                 <th scope="col" class="px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-gray-500">
@@ -154,7 +158,7 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
                   <% end %>
                 </td>
                 <td class="px-4 py-3 font-mono text-[10px] uppercase tracking-wider text-gray-500">
-                  {PlaidCategories.format(txn.personal_finance_category) || "—"}
+                  {meta_category_name(txn)}
                 </td>
                 <%= if @scope != :account do %>
                   <td class="px-4 py-3 text-xs text-gray-400">
@@ -175,9 +179,9 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
 
       <%!-- Keyset pagination bar --%>
       <div class="flex items-center justify-between px-4 py-3 border-t border-gray-800 bg-black">
-        <%= if show_previous?(@params, @page) do %>
+        <%= if show_previous?(@page) do %>
           <.link
-            patch={build_url(@base_url, %{@params | before_cursor: @page.before, after_cursor: nil})}
+            patch={build_url(@base_url, %{@params | before_cursor: page_first_keyset(@page), after_cursor: nil})}
             class="font-mono text-[10px] uppercase tracking-widest px-3 py-1.5 rounded border border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-200 transition-colors"
           >
             ← Previous
@@ -194,9 +198,9 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
           <% end %>
         </span>
 
-        <%= if @page && @page.more? do %>
+        <%= if show_next?(@page) do %>
           <.link
-            patch={build_url(@base_url, %{@params | after_cursor: @page.after, before_cursor: nil})}
+            patch={build_url(@base_url, %{@params | after_cursor: page_last_keyset(@page), before_cursor: nil})}
             class="font-mono text-[10px] uppercase tracking-widest px-3 py-1.5 rounded border border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-200 transition-colors"
           >
             Next →
@@ -218,7 +222,7 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
       | search: nilify(params["search"]),
         date_from: nilify(params["date_from"]),
         date_to: nilify(params["date_to"]),
-        category: nilify(params["category"]),
+        meta_category_id: nilify(params["category"]),
         after_cursor: nil,
         before_cursor: nil
     }
@@ -258,7 +262,7 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
       |> maybe_put("search", params.search, nil)
       |> maybe_put("date_from", format_date_param(params.date_from), nil)
       |> maybe_put("date_to", format_date_param(params.date_to), nil)
-      |> maybe_put("category", params.category, nil)
+      |> maybe_put("category", params.meta_category_id, nil)
       |> maybe_put("after", params.after_cursor, nil)
       |> maybe_put("before", params.before_cursor, nil)
 
@@ -278,15 +282,38 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
   defp format_date_param(s) when is_binary(s), do: s
 
   defp has_active_filters?(params) do
-    params.search || params.date_from || params.date_to || params.category
+    params.search || params.date_from || params.date_to || params.meta_category_id
   end
 
-  # Only show "Previous" when the user has actually paged forward or backward,
-  # because keyset pages always expose a `before` cursor once results exist.
-  defp show_previous?(_params, nil), do: false
-  defp show_previous?(_params, %{before: nil}), do: false
-  defp show_previous?(%{after_cursor: nil, before_cursor: nil}, _page), do: false
-  defp show_previous?(_params, _page), do: true
+  # Pagination direction is encoded in which cursor field Ash populates on the
+  # returned page struct (`page.before` when navigating backwards, `page.after`
+  # when navigating forwards or on the first page).
+  #
+  # Backwards navigation: Previous exists only when there are more rows behind
+  # the cursor (`more?`). Next always exists (we came from it).
+  defp show_previous?(%Ash.Page.Keyset{before: b, more?: more?}) when not is_nil(b), do: more?
+  # Forwards navigation / first page: Previous exists iff we used an after-cursor.
+  defp show_previous?(%Ash.Page.Keyset{after: a}) when not is_nil(a), do: true
+  defp show_previous?(%Ash.Page.Keyset{}), do: false
+  defp show_previous?(_), do: false
+
+  # Backwards navigation: Next always exists (we came from it).
+  defp show_next?(%Ash.Page.Keyset{before: b}) when not is_nil(b), do: true
+  # Forwards navigation / first page: Next exists only when there are more rows.
+  defp show_next?(%Ash.Page.Keyset{more?: more?}), do: more?
+  defp show_next?(_), do: false
+
+  # Per-record keysets live at `record.__metadata__.keyset`, not on the page struct.
+  # `Ash.Page.Keyset.before` / `.after` hold the *input* cursors, not output ones.
+  defp page_first_keyset(%{results: [_ | _] = results}),
+    do: List.first(results).__metadata__.keyset
+
+  defp page_first_keyset(_), do: nil
+
+  defp page_last_keyset(%{results: [_ | _] = results}),
+    do: List.last(results).__metadata__.keyset
+
+  defp page_last_keyset(_), do: nil
 
   # --- Display helpers --------------------------------------------------------
 
@@ -300,11 +327,15 @@ defmodule FinanceSmithWeb.TransactionTableComponent do
       | search: nil,
         date_from: nil,
         date_to: nil,
-        category: nil,
+        meta_category_id: nil,
         after_cursor: nil,
         before_cursor: nil
     }
   end
+
+  defp meta_category_name(%{meta_category: %{name: name}}) when is_binary(name), do: name
+  defp meta_category_name(%{meta_category_id: nil}), do: "—"
+  defp meta_category_name(_), do: "Uncategorized"
 
   defp nilify(""), do: nil
   defp nilify(v), do: v

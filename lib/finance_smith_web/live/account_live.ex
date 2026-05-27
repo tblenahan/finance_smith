@@ -44,7 +44,7 @@ defmodule FinanceSmithWeb.AccountLive do
   end
 
   def handle_info(%{topic: "transaction:created", payload: %Ash.Notifier.Notification{}}, socket) do
-    {:noreply, apply_transactions(socket, socket.assigns.tx_params)}
+    {:noreply, refresh_view(socket)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -100,6 +100,18 @@ defmodule FinanceSmithWeb.AccountLive do
   end
 
   # --- Helpers ----------------------------------------------------------------
+
+  defp refresh_view(socket) do
+    user = socket.assigns.current_user
+    account_id = socket.assigns.account_id
+
+    socket
+    |> assign(
+      :categories,
+      TransactionLiveHelpers.list_categories(user, %{account_id: account_id})
+    )
+    |> apply_transactions(socket.assigns.tx_params)
+  end
 
   defp apply_transactions(socket, tx_params) do
     case TransactionLiveHelpers.fetch_transactions(

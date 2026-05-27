@@ -12,7 +12,8 @@ defmodule FinanceSmithWeb.TransactionLiveHelpers do
 
   @sort_field_atoms %{"date" => :date, "amount" => :amount, "merchant_name" => :merchant_name}
   @sort_dir_atoms %{"asc" => :asc, "desc" => :desc}
-  @max_category_length 100
+  @valid_sort_by_fields Map.keys(@sort_field_atoms) ++ ["category"]
+  @uuid_regex ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
   @doc """
   Returns the default transaction params map, with a 30-day date_from window.
@@ -25,7 +26,7 @@ defmodule FinanceSmithWeb.TransactionLiveHelpers do
       before_cursor: nil,
       date_from: Date.add(Date.utc_today(), -30),
       date_to: nil,
-      category: nil,
+      meta_category_id: nil,
       search: nil
     }
   end
@@ -42,23 +43,25 @@ defmodule FinanceSmithWeb.TransactionLiveHelpers do
       before_cursor: url_params["before"],
       date_from: parse_date(url_params["date_from"], Date.add(Date.utc_today(), -30)),
       date_to: parse_date(url_params["date_to"], nil),
-      category: valid_category(url_params["category"]),
+      meta_category_id: valid_uuid(url_params["category"]),
       search: nilify(url_params["search"])
     }
   end
 
   @doc """
-  Returns the distinct `personal_finance_category` values visible to `user`,
-  optionally scoped to a specific account or Plaid item.
+  Returns the list of `MetaCategory` records visible to `user`.
 
-  Returns an empty list on error rather than raising, matching the graceful
-  degradation pattern used by `fetch_transactions/3`.
+  The optional `scope_filters` argument is accepted for call-site
+  compatibility but is not used — meta-categories are household-level
+  and the Ash policy scopes reads to the actor's household automatically.
+
+  Returns a list of structs with at least `:id` and `:name` fields.
   """
-  @spec list_categories(map(), map()) :: [String.t()]
-  def list_categories(user, scope_filters \\ %{}) do
-    case Banking.list_transaction_categories(scope_filters, actor: user) do
+  @spec list_categories(map(), map()) :: [map()]
+  def list_categories(user, _scope_filters \\ %{}) do
+    case Banking.list_meta_categories(actor: user, query: [sort: [name: :asc]]) do
       {:ok, records} ->
-        Enum.map(records, & &1.personal_finance_category)
+        records
 
       {:error, reason} ->
         Logger.warning("[TransactionLiveHelpers] list_categories failed", error: inspect(reason))
@@ -81,9 +84,8 @@ defmodule FinanceSmithWeb.TransactionLiveHelpers do
           map()
         ) :: {:ok, Ash.Page.Keyset.t()} | {:error, term()}
   def fetch_transactions(user, tx_params, scope_filters \\ %{}) do
-    sort_field = Map.fetch!(@sort_field_atoms, tx_params.sort_by)
     sort_dir = Map.fetch!(@sort_dir_atoms, tx_params.sort_dir)
-    sort = [{sort_field, sort_dir}, {:inserted_at, :desc}]
+    sort = build_sort(tx_params.sort_by, sort_dir)
 
     page_opts =
       [limit: 25, count: true]
@@ -95,7 +97,7 @@ defmodule FinanceSmithWeb.TransactionLiveHelpers do
         %{
           date_from: tx_params.date_from,
           date_to: tx_params.date_to,
-          category: tx_params.category,
+          meta_category_id: tx_params.meta_category_id,
           search: tx_params.search
         },
         scope_filters
@@ -113,20 +115,24 @@ defmodule FinanceSmithWeb.TransactionLiveHelpers do
 
   # --- Private helpers --------------------------------------------------------
 
-  defp valid_sort_by(field) when field in ["date", "amount", "merchant_name"], do: field
+  defp valid_sort_by(field) when field in @valid_sort_by_fields, do: field
   defp valid_sort_by(_), do: "date"
+
+  defp build_sort("category", dir), do: [{:"meta_category.name", dir}, {:inserted_at, :desc}]
+
+  defp build_sort(field, dir) do
+    sort_field = Map.fetch!(@sort_field_atoms, field)
+    [{sort_field, dir}, {:inserted_at, :desc}]
+  end
 
   defp valid_sort_dir(dir) when dir in ["asc", "desc"], do: dir
   defp valid_sort_dir(_), do: "desc"
 
-  # The filter is a parameterized equality on a text column, so any string is
-  # safe — an unknown category just yields zero rows. We only guard against
-  # empty strings and pathologically long inputs.
-  defp valid_category(cat)
-       when is_binary(cat) and byte_size(cat) > 0 and byte_size(cat) <= @max_category_length,
-       do: cat
+  defp valid_uuid(value) when is_binary(value) do
+    if Regex.match?(@uuid_regex, value), do: value, else: nil
+  end
 
-  defp valid_category(_), do: nil
+  defp valid_uuid(_), do: nil
 
   defp parse_date(nil, default), do: default
   defp parse_date("", default), do: default

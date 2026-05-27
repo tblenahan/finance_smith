@@ -43,7 +43,7 @@ defmodule FinanceSmithWeb.ConnectionLive do
   end
 
   def handle_info(%{topic: "transaction:created", payload: %Ash.Notifier.Notification{}}, socket) do
-    {:noreply, apply_transactions(socket, socket.assigns.tx_params)}
+    {:noreply, refresh_view(socket)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -114,6 +114,18 @@ defmodule FinanceSmithWeb.ConnectionLive do
 
   # --- Helpers ----------------------------------------------------------------
 
+  defp refresh_view(socket) do
+    user = socket.assigns.current_user
+    plaid_item_id = socket.assigns.plaid_item_id
+
+    socket
+    |> assign(
+      :categories,
+      TransactionLiveHelpers.list_categories(user, %{plaid_item_id: plaid_item_id})
+    )
+    |> apply_transactions(socket.assigns.tx_params)
+  end
+
   defp apply_transactions(socket, tx_params) do
     case TransactionLiveHelpers.fetch_transactions(
            socket.assigns.current_user,
@@ -137,7 +149,10 @@ defmodule FinanceSmithWeb.ConnectionLive do
         nil
 
       {:error, reason} ->
-        Logger.warning("[ConnectionLive] get_plaid_item_by_id failed", error: inspect(reason))
+        Logger.warning("[ConnectionLive] get_plaid_item_summary_by_id failed",
+          error: inspect(reason)
+        )
+
         nil
     end
   end

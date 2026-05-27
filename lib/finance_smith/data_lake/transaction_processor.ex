@@ -15,15 +15,27 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   ## Processing flow
 
-  1. Build a lookup map of Plaid account ID -> internal account UUID.
-  2. Run all DB operations inside a single Repo transaction:
-     - `added` / `modified` → upsert on `:unique_plaid_id`, collecting
+  1. Ensure the PlaidItem has `user.household` loaded; derive `household_id`.
+  2. Build a lookup map of Plaid account ID -> internal account UUID.
+  3. Resolve a `%{source_category_token => meta_category_id}` lookup for all
+     unique category tokens present in the payload batch via
+     `CategoryResolution.resolve_tokens!/2`:
+     - Batch-load existing `CategoryMapping` rows in one query.
+     - For missing tokens, try prefix matching against the 16 Plaid primary
+       tokens first (e.g. `FOOD_AND_DRINK_GROCERIES` → `FOOD_AND_DRINK`).
+     - Tokens with no prefix match fall back to the household's "Uncategorized"
+       `MetaCategory`, creating it first if needed.
+     - Bulk-upsert new mappings, then re-read from DB so the lookup reflects
+       the actual DB winner (race-safe under concurrent Oban workers).
+  4. Run all transaction DB operations inside a single Repo transaction:
+     - `added` / `modified` → upsert on `:unique_plaid_id`, stamping
+       `meta_category_id` from the resolved lookup, collecting
        `Ash.Notifier.Notification` structs via `return_notifications?: true`
      - `removed` → bulk destroy by `plaid_transaction_id`
-  3. After the transaction commits, flush the collected notifications via
+  5. After the transaction commits, flush the collected notifications via
      `Ash.Notifier.notify/1` so PubSub subscribers (e.g. the Dashboard LiveView)
      receive `"transaction:created"` broadcasts without missed-notification warnings.
-  4. Return `:ok` on success or raise on failure.
+  6. Return `:ok` on success or raise on failure.
 
   ## Amount convention
 
@@ -33,7 +45,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   alias FinanceSmith.DataLake.{B2, KeyBuilder}
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.{PlaidItem, Transaction}
+  alias FinanceSmith.Banking.{CategoryResolution, PlaidItem, Transaction}
 
   require Ash.Query
   require Logger
@@ -41,7 +53,8 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
   @doc """
   Processes a sync payload directly from memory.
 
-  `plaid_item` must have `:accounts` loaded.
+  `plaid_item` must have `:accounts` loaded; `user.household` is loaded lazily
+  inside `process/2` if not already present.
   `payload` is a string-keyed map as produced by `Uploader.to_sync_payload/1`.
 
   Returns `:ok` or raises on failure.
@@ -52,13 +65,20 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
       "[TransactionProcessor] Processing. plaid_item=#{plaid_item.id} added=#{length(payload["added"] || [])} modified=#{length(payload["modified"] || [])} removed=#{length(payload["removed"] || [])}"
     )
 
+    plaid_item = ensure_user_household_loaded!(plaid_item)
+    household_id = plaid_item.user.household_id
     account_lookup = build_account_lookup(plaid_item)
+    category_lookup = resolve_category_mappings!(payload, household_id)
 
     FinanceSmith.Repo.transaction(fn ->
       notifications =
         []
-        |> collect_upsert_notifications(payload["added"] || [], account_lookup)
-        |> collect_upsert_notifications(payload["modified"] || [], account_lookup)
+        |> collect_upsert_notifications(payload["added"] || [], account_lookup, category_lookup)
+        |> collect_upsert_notifications(
+          payload["modified"] || [],
+          account_lookup,
+          category_lookup
+        )
         |> Enum.reverse()
 
       remove_transactions!(payload["removed"] || [])
@@ -79,8 +99,9 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
   @doc """
   Downloads the B2 archive at `object_key`, parses it, and calls `process/2`.
 
-  The PlaidItem is resolved from the object key path, loaded with its accounts,
-  then passed to `process/2`. This is the primary path called by `ProcessWorker`.
+  The PlaidItem is resolved from the object key path, loaded with its accounts
+  and household context, then passed to `process/2`. This is the primary path
+  called by `ProcessWorker`.
 
   Returns `:ok` or raises on failure.
   """
@@ -102,25 +123,56 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     process(plaid_item, payload)
   end
 
+  # --- Household context normalization --------------------------------------
+
+  # Raises on failure — the processor has no recovery path if household context
+  # cannot be established. `Ash.load!/3` is idempotent for already-loaded fields.
+  defp ensure_user_household_loaded!(%PlaidItem{} = item) do
+    Ash.load!(item, [user: :household], authorize?: false)
+  end
+
   # --- Account lookup -------------------------------------------------------
 
   defp build_account_lookup(%PlaidItem{accounts: accounts}) do
     Map.new(accounts, fn account -> {account.plaid_account_id, account.id} end)
   end
 
+  # --- Category mapping resolution ------------------------------------------
+
+  defp resolve_category_mappings!(payload, household_id) do
+    CategoryResolution.resolve_tokens!(category_tokens(payload), household_id)
+  end
+
+  defp category_tokens(payload) do
+    (payload["added"] || [])
+    |> Kernel.++(payload["modified"] || [])
+    |> Enum.map(&personal_finance_category_token/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  # Safe structural navigation — returns nil if the nested map or "detailed"
+  # key is missing, nil, or not a non-empty string.
+  defp personal_finance_category_token(txn) do
+    case get_in(txn, ["personal_finance_category", "detailed"]) do
+      token when is_binary(token) and token != "" -> token
+      _ -> nil
+    end
+  end
+
   # --- Transaction writes ---------------------------------------------------
 
-  defp collect_upsert_notifications(acc, transactions, account_lookup) do
+  defp collect_upsert_notifications(acc, transactions, account_lookup, category_lookup) do
     Enum.reduce(transactions, acc, fn txn, acc ->
       plaid_account_id = txn["account_id"]
 
       case Map.fetch(account_lookup, plaid_account_id) do
         {:ok, account_id} ->
-          attrs = build_transaction_attrs(txn, account_id)
+          attrs = build_transaction_attrs(txn, account_id, category_lookup)
 
           {_record, notifs} =
             Transaction
-            |> Ash.Changeset.for_create(:create, attrs, authorize?: false)
+            |> Ash.Changeset.for_create(:create, attrs)
             |> Ash.create!(
               upsert?: true,
               upsert_identity: :unique_plaid_id,
@@ -163,18 +215,14 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     personal_finance_category
   )
 
-  defp build_transaction_attrs(txn, account_id) do
+  defp build_transaction_attrs(txn, account_id, category_lookup) do
     date =
       case txn["date"] do
         nil -> nil
         date_str -> Date.from_iso8601!(date_str)
       end
 
-    personal_finance_category =
-      case txn["personal_finance_category"] do
-        %{"detailed" => detailed} when is_binary(detailed) -> detailed
-        _ -> nil
-      end
+    personal_finance_category = personal_finance_category_token(txn)
 
     metadata =
       txn
@@ -188,6 +236,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
       merchant_name: txn["merchant_name"],
       website: txn["website"],
       personal_finance_category: personal_finance_category,
+      meta_category_id: category_lookup[personal_finance_category],
       is_pending: txn["pending"] || false,
       account_id: account_id,
       metadata: metadata
@@ -227,7 +276,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
   defp load_plaid_item_by_plaid_id!(plaid_item_id) do
     Banking.PlaidItem
     |> Ash.Query.filter(plaid_item_id == ^plaid_item_id)
-    |> Ash.Query.load(:accounts)
+    |> Ash.Query.load([:accounts, user: :household])
     |> Ash.read_one!(authorize?: false)
     |> case do
       nil -> raise "[TransactionProcessor] PlaidItem not found: plaid_item_id=#{plaid_item_id}"

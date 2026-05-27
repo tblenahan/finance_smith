@@ -2,7 +2,6 @@ defmodule FinanceSmithWeb.DashboardLive do
   use FinanceSmithWeb, :live_view
 
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.PlaidCategories
   alias FinanceSmith.DataLake.SyncWorker
   alias FinanceSmith.Identity
   alias FinanceSmithWeb.MoneyFormat
@@ -517,95 +516,19 @@ defmodule FinanceSmithWeb.DashboardLive do
   defp build_outflow_categories(rows) do
     rows
     |> Stream.filter(fn %{amount: a} -> is_integer(a) and a > 0 end)
-    |> Enum.reduce(%{}, fn %{amount: a, personal_finance_category: cat}, acc ->
-      key = cat || "UNCATEGORIZED"
-      Map.update(acc, key, a, &(&1 + a))
+    |> Enum.reduce(%{}, fn txn, acc ->
+      name = meta_category_label(txn)
+      Map.update(acc, name, txn.amount, &(&1 + txn.amount))
     end)
-    |> Enum.map(fn {raw_key, cents} ->
-      %{
-        name: format_plaid_category(plaid_pfc_v2_primary(raw_key)),
-        value: cents / 100.0,
-        readable_name: PlaidCategories.format(raw_key) || "uncategorized"
-      }
+    |> Enum.map(fn {name, cents} ->
+      %{name: name, value: cents / 100.0, readable_name: name}
     end)
     |> Enum.sort_by(& &1.value, :desc)
   end
 
-  # Plaid PFC v2 detailed strings share a prefix with their primary (e.g. FOOD_AND_DRINK_GROCERIES).
-  @plaid_pfc_v2_primaries ~w(
-    GOVERNMENT_AND_NON_PROFIT
-    GENERAL_MERCHANDISE
-    HOME_IMPROVEMENT
-    RENT_AND_UTILITIES
-    PERSONAL_CARE
-    GENERAL_SERVICES
-    TRANSPORTATION
-    FOOD_AND_DRINK
-    LOAN_PAYMENTS
-    ENTERTAINMENT
-    TRANSFER_OUT
-    TRANSFER_IN
-    BANK_FEES
-    MEDICAL
-    INCOME
-    TRAVEL
-  )
-
-  defp plaid_pfc_v2_primary(nil), do: nil
-
-  defp plaid_pfc_v2_primary("UNCATEGORIZED"), do: nil
-
-  defp plaid_pfc_v2_primary(detail) when is_binary(detail) do
-    @plaid_pfc_v2_primaries
-    |> Enum.sort_by(&byte_size/1, :desc)
-    |> Enum.find(fn p ->
-      detail == p or String.starts_with?(detail, p <> "_")
-    end) || detail
-  end
-
-  defp format_plaid_category("INCOME"), do: "Inc."
-
-  defp format_plaid_category("TRANSFER_IN"), do: "Tfr In"
-
-  defp format_plaid_category("TRANSFER_OUT"), do: "Tfr Out"
-
-  defp format_plaid_category("LOAN_PAYMENTS"), do: "Loans"
-
-  defp format_plaid_category("BANK_FEES"), do: "Fees"
-
-  defp format_plaid_category("ENTERTAINMENT"), do: "Ent."
-
-  defp format_plaid_category("FOOD_AND_DRINK"), do: "F&D"
-
-  defp format_plaid_category("GENERAL_MERCHANDISE"), do: "Mdse."
-
-  defp format_plaid_category("HOME_IMPROVEMENT"), do: "Hm Imp."
-
-  defp format_plaid_category("MEDICAL"), do: "Med."
-
-  defp format_plaid_category("PERSONAL_CARE"), do: "P. Care"
-
-  defp format_plaid_category("GENERAL_SERVICES"), do: "Svcs."
-
-  defp format_plaid_category("GOVERNMENT_AND_NON_PROFIT"), do: "Govt/NP"
-
-  defp format_plaid_category("TRANSPORTATION"), do: "Transp."
-
-  defp format_plaid_category("TRAVEL"), do: "Trvl."
-
-  defp format_plaid_category("RENT_AND_UTILITIES"), do: "Util."
-
-  # Catch-all for new Plaid PFC v2 primaries. Truncated to 7 chars to fit pie
-  # slice labels without wrapping.
-  defp format_plaid_category(other) when is_binary(other) do
-    other
-    |> String.split("_")
-    |> Enum.map(&String.capitalize/1)
-    |> Enum.join("")
-    |> String.slice(0, 7)
-  end
-
-  defp format_plaid_category(nil), do: "Misc."
+  defp meta_category_label(%{meta_category_name: name}) when is_binary(name), do: name
+  defp meta_category_label(%{meta_category_id: nil}), do: "—"
+  defp meta_category_label(_), do: "Uncategorized"
 
   defp push_chart_data(socket, timeframe, scope) do
     case fetch_financial_data(timeframe, socket.assigns.current_user, scope) do
