@@ -54,7 +54,7 @@ defmodule FinanceSmith.Banking.Transaction do
       argument :user_id, :uuid, allow_nil?: true
 
       prepare build(
-                select: [:date, :amount],
+                select: [:date, :amount, :meta_category_id],
                 load: [:meta_category_name],
                 sort: [date: :asc],
                 limit: 10_000

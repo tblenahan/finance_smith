@@ -5,7 +5,7 @@ defmodule FinanceSmithWeb.DashboardLiveTest do
   import Phoenix.LiveViewTest
   import Mox
 
-  alias FinanceSmith.Banking.PlaidItem
+  alias FinanceSmith.Banking.{MetaCategory, PlaidItem, Transaction}
   alias FinanceSmith.BankingFixtures
   alias FinanceSmith.Identity
   alias FinanceSmith.Test.PlaidTestHelpers
@@ -29,6 +29,34 @@ defmodule FinanceSmithWeb.DashboardLiveTest do
   defp live_dashboard(conn) do
     live(conn, "/dashboard")
   end
+
+  defp create_meta_category!(household_id, name) do
+    MetaCategory
+    |> Ash.Changeset.for_create(:create_system, %{name: name, household_id: household_id})
+    |> Ash.create!(authorize?: false)
+  end
+
+  defp create_chart_transaction!(account, attrs) do
+    unique = System.unique_integer([:positive])
+
+    attrs =
+      %{
+        plaid_transaction_id: "chart-txn-#{unique}",
+        amount: attrs.amount,
+        date: Map.get(attrs, :date, Date.utc_today()),
+        merchant_name: Map.get(attrs, :merchant_name, "Chart Merchant"),
+        account_id: account.id,
+        is_pending: false
+      }
+      |> maybe_put(:meta_category_id, Map.get(attrs, :meta_category_id))
+
+    Transaction
+    |> Ash.Changeset.for_create(:create, attrs)
+    |> Ash.create!(authorize?: false)
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   describe "mount" do
     test "redirects unauthenticated requests to the login page", %{conn: conn} do
@@ -231,6 +259,48 @@ defmodule FinanceSmithWeb.DashboardLiveTest do
              "Following Previous from page 2 must return 25 rows, got #{page1_return_row_count}"
 
       _ = view
+    end
+  end
+
+  describe "chart data" do
+    test "outflow pie chart separates named, uncategorized, and no-category transactions", %{
+      conn: conn
+    } do
+      user = register_user!()
+      plaid_item = BankingFixtures.create_plaid_item!(user)
+      account = BankingFixtures.create_account!(plaid_item)
+
+      groceries = create_meta_category!(user.household_id, "Groceries")
+      uncategorized = create_meta_category!(user.household_id, "Uncategorized")
+
+      create_chart_transaction!(account, %{
+        amount: 4200,
+        merchant_name: "Market",
+        meta_category_id: groceries.id
+      })
+
+      create_chart_transaction!(account, %{
+        amount: 2100,
+        merchant_name: "Mystery Merchant",
+        meta_category_id: uncategorized.id
+      })
+
+      create_chart_transaction!(account, %{
+        amount: 900,
+        merchant_name: "No Token"
+      })
+
+      {:ok, view, _html} = conn |> log_in_user(user) |> live_dashboard()
+
+      assert_push_event(view, "update-chart-outflow-pie-chart", %{
+        series: [%{data: pie_data}]
+      })
+
+      values_by_name = Map.new(pie_data, &{&1.name, &1.value})
+
+      assert values_by_name["Groceries"] == 42.0
+      assert values_by_name["Uncategorized"] == 21.0
+      assert values_by_name["—"] == 9.0
     end
   end
 

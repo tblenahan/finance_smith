@@ -16,6 +16,10 @@ defmodule FinanceSmith.Banking.CategoryResolution do
 
   All new mappings are persisted as `unreviewed: true` and can be manually
   remapped by the household later.
+
+  Remapping a `CategoryMapping` is forward-looking only — already-synced
+  transactions retain their prior `meta_category_id` until re-sync or a
+  manual backfill (`priv/repo/backfill_plaid_transaction_categories.exs`).
   """
 
   alias FinanceSmith.Banking.{CategoryMapping, MetaCategory}
