@@ -222,17 +222,21 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
          pending_lookup
        )
        when is_binary(pending_transaction_id) and pending_transaction_id != "" do
-    case Map.get(pending_lookup, pending_transaction_id) do
-      nil ->
-        upsert_transaction(attrs, notifications, resolved_pending_ids)
+    if MapSet.member?(resolved_pending_ids, pending_transaction_id) do
+      upsert_transaction(attrs, notifications, resolved_pending_ids)
+    else
+      case Map.get(pending_lookup, pending_transaction_id) do
+        nil ->
+          upsert_transaction(attrs, notifications, resolved_pending_ids)
 
-      pending_transaction ->
-        maybe_resolve_pending_transaction(
-          pending_transaction,
-          attrs,
-          notifications,
-          resolved_pending_ids
-        )
+        pending_transaction ->
+          maybe_resolve_pending_transaction(
+            pending_transaction,
+            attrs,
+            notifications,
+            resolved_pending_ids
+          )
+      end
     end
   end
 
