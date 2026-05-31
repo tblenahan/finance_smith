@@ -503,6 +503,7 @@ defmodule FinanceSmithWeb.TransactionLiveHelpersTest do
         )
 
       assert result.results == []
+      assert result.count == 0
     end
 
     test "drops swapped row when it no longer matches category filter" do
@@ -539,6 +540,7 @@ defmodule FinanceSmithWeb.TransactionLiveHelpersTest do
         )
 
       assert result.results == []
+      assert result.count == 0
     end
 
     test "drops swapped row when merchant name no longer matches search filter" do
@@ -571,6 +573,7 @@ defmodule FinanceSmithWeb.TransactionLiveHelpersTest do
         )
 
       assert result.results == []
+      assert result.count == 0
     end
 
     test "keeps swapped row when merchant name matches search case-insensitively" do
@@ -678,6 +681,69 @@ defmodule FinanceSmithWeb.TransactionLiveHelpersTest do
       assert result.more? == true
       assert result.before == "some-cursor"
       assert result.limit == 25
+    end
+
+    test "decrements count by 1 when resolved row is dropped; leaves count unchanged when row is kept" do
+      account = fake_account()
+
+      pending_row =
+        fake_txn(%{
+          plaid_transaction_id: "pending-countcheck",
+          is_pending: true,
+          date: ~D[2026-05-01],
+          account: account
+        })
+
+      other_row = fake_txn(%{plaid_transaction_id: "other-row", date: ~D[2026-05-10]})
+
+      # 2 rows on the page, total count reported as 50
+      page = %Ash.Page.Keyset{
+        results: [other_row, pending_row],
+        count: 50,
+        more?: true,
+        before: nil,
+        after: nil,
+        limit: 25
+      }
+
+      # Posted transaction resolves to a date outside the active filter window
+      dropped_txn =
+        fake_txn(%{
+          pending_transaction_id: "pending-countcheck",
+          date: ~D[2026-01-01]
+        })
+
+      tx_params = default_tx_params(%{date_from: ~D[2026-04-15]})
+
+      result =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          dropped_txn,
+          tx_params,
+          []
+        )
+
+      # The pending row is dropped; count decrements by 1
+      assert length(result.results) == 1
+      assert result.count == 49
+
+      # Now verify a kept swap leaves count unchanged
+      kept_txn =
+        fake_txn(%{
+          pending_transaction_id: "pending-countcheck",
+          date: ~D[2026-05-15]
+        })
+
+      result2 =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          kept_txn,
+          tx_params,
+          []
+        )
+
+      assert length(result2.results) == 2
+      assert result2.count == 50
     end
   end
 end

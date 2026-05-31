@@ -40,7 +40,7 @@ defmodule FinanceSmith.Banking.Transaction do
   end
 
   actions do
-    defaults [:read, :destroy, create: :*, update: :*]
+    defaults [:read, :destroy, create: :*]
 
     update :resolve_pending do
       accept [

@@ -221,9 +221,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
          is_nil(find_transaction_by_plaid_id(posted_transaction_id)) do
       {_record, notifs} =
         pending_transaction
-        |> Ash.Changeset.for_update(:resolve_pending, resolve_pending_attrs(attrs),
-          authorize?: false
-        )
+        |> Ash.Changeset.for_update(:resolve_pending, resolve_pending_attrs(attrs))
         |> Ash.update!(authorize?: false, return_notifications?: true)
 
       {List.wrap(notifs) ++ notifications,

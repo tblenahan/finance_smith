@@ -133,8 +133,8 @@ defmodule FinanceSmithWeb.TransactionLiveHelpers do
 
   Active UI filters are respected: if the rebuilt row no longer matches
   `tx_params`, it is dropped from the results rather than inserted blind.
-  The `page.count` field is intentionally left unchanged (the underlying DB
-  row still exists).
+  `page.count` is decremented by 1 in that case so the pagination footer
+  ("N total") stays consistent with the visible row count.
 
   Security: we only ever touch rows already present in `page.results`, which
   were policy-scoped to the actor at query time. Cross-household PubSub payloads
@@ -169,7 +169,8 @@ defmodule FinanceSmithWeb.TransactionLiveHelpers do
           end
         end)
 
-      %{page | results: new_results}
+      dropped_count = length(page.results) - length(new_results)
+      %{page | results: new_results, count: max(page.count - dropped_count, 0)}
     end
   end
 
@@ -204,6 +205,10 @@ defmodule FinanceSmithWeb.TransactionLiveHelpers do
   defp matches_search?(_txn, nil), do: true
   defp matches_search?(_txn, ""), do: true
 
+  # String.downcase/1 uses Unicode simple case folding, while the server-side
+  # :list action uses PostgreSQL ILIKE with the database locale's collation.
+  # For Latin-script merchant names these are equivalent; non-ASCII names may
+  # produce different results between the in-memory and DB filters.
   defp matches_search?(txn, search) do
     needle = String.downcase(search)
     haystack = String.downcase(txn.merchant_name || "")
