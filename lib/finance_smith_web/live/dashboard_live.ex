@@ -177,19 +177,8 @@ defmodule FinanceSmithWeb.DashboardLive do
     {:noreply, refresh_scope_data(socket, socket.assigns.view_scope)}
   end
 
-  def handle_info(
-        %{topic: "transaction:updated", payload: %Ash.Notifier.Notification{data: updated_txn}},
-        socket
-      ) do
-    page =
-      TransactionLiveHelpers.apply_resolved_transaction(
-        socket.assigns.page,
-        updated_txn,
-        socket.assigns.tx_params,
-        socket.assigns.categories
-      )
-
-    {:noreply, assign(socket, :page, page)}
+  def handle_info(%{topic: "transaction:updated", payload: %Ash.Notifier.Notification{}}, socket) do
+    {:noreply, refresh_scope_data(socket, socket.assigns.view_scope)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}

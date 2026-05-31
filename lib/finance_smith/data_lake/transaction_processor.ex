@@ -71,6 +71,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     household_id = plaid_item.user.household_id
     account_lookup = build_account_lookup(plaid_item)
     category_lookup = resolve_category_mappings!(payload, household_id)
+    pending_lookup = build_pending_lookup(payload)
 
     FinanceSmith.Repo.transaction(fn ->
       {notifications, resolved_pending_ids} =
@@ -78,12 +79,14 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
         |> collect_transaction_notifications(
           payload["added"] || [],
           account_lookup,
-          category_lookup
+          category_lookup,
+          pending_lookup
         )
         |> collect_transaction_notifications(
           payload["modified"] || [],
           account_lookup,
-          category_lookup
+          category_lookup,
+          pending_lookup
         )
 
       remove_transactions!(payload["removed"] || [], resolved_pending_ids)
@@ -167,7 +170,31 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   # --- Transaction writes ---------------------------------------------------
 
-  defp collect_transaction_notifications(acc, transactions, account_lookup, category_lookup) do
+  defp build_pending_lookup(payload) do
+    pending_ids =
+      (payload["added"] || [])
+      |> Kernel.++(payload["modified"] || [])
+      |> Enum.map(& &1["pending_transaction_id"])
+      |> Enum.filter(&(is_binary(&1) and &1 != ""))
+      |> Enum.uniq()
+
+    if pending_ids == [] do
+      %{}
+    else
+      Transaction
+      |> Ash.Query.filter(plaid_transaction_id in ^pending_ids)
+      |> Ash.read!(authorize?: false)
+      |> Map.new(&{&1.plaid_transaction_id, &1})
+    end
+  end
+
+  defp collect_transaction_notifications(
+         acc,
+         transactions,
+         account_lookup,
+         category_lookup,
+         pending_lookup
+       ) do
     Enum.reduce(transactions, acc, fn txn, {notifications, resolved_pending_ids} = acc ->
       plaid_account_id = txn["account_id"]
 
@@ -175,7 +202,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
         {:ok, account_id} ->
           attrs = build_transaction_attrs(txn, account_id, category_lookup)
 
-          process_transaction(attrs, notifications, resolved_pending_ids)
+          process_transaction(attrs, notifications, resolved_pending_ids, pending_lookup)
 
         :error ->
           Logger.warning(
@@ -190,10 +217,11 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
   defp process_transaction(
          %{pending_transaction_id: pending_transaction_id} = attrs,
          notifications,
-         resolved_pending_ids
+         resolved_pending_ids,
+         pending_lookup
        )
        when is_binary(pending_transaction_id) and pending_transaction_id != "" do
-    case find_transaction_by_plaid_id(pending_transaction_id) do
+    case Map.get(pending_lookup, pending_transaction_id) do
       nil ->
         upsert_transaction(attrs, notifications, resolved_pending_ids)
 
@@ -207,7 +235,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     end
   end
 
-  defp process_transaction(attrs, notifications, resolved_pending_ids) do
+  defp process_transaction(attrs, notifications, resolved_pending_ids, _pending_lookup) do
     upsert_transaction(attrs, notifications, resolved_pending_ids)
   end
 

@@ -745,5 +745,66 @@ defmodule FinanceSmithWeb.TransactionLiveHelpersTest do
       assert length(result2.results) == 2
       assert result2.count == 50
     end
+
+    test "drops resolved row when its date exceeds date_to (date_to-only filter)" do
+      account = fake_account()
+
+      pending_row =
+        fake_txn(%{
+          plaid_transaction_id: "pending-dateto",
+          is_pending: true,
+          date: ~D[2026-03-01],
+          account: account
+        })
+
+      other_row = fake_txn(%{plaid_transaction_id: "other-dateto", date: ~D[2026-02-15]})
+
+      page = %Ash.Page.Keyset{
+        results: [other_row, pending_row],
+        count: 10,
+        more?: false,
+        before: nil,
+        after: nil,
+        limit: 25
+      }
+
+      # Resolved to a date after date_to — should be dropped from the page
+      resolved_after_cutoff =
+        fake_txn(%{
+          pending_transaction_id: "pending-dateto",
+          date: ~D[2026-05-01]
+        })
+
+      tx_params = default_tx_params(%{date_from: nil, date_to: ~D[2026-04-01]})
+
+      result =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          resolved_after_cutoff,
+          tx_params,
+          []
+        )
+
+      assert length(result.results) == 1
+      assert result.count == 9
+
+      # Resolved to a date on or before date_to — should be kept
+      resolved_within_cutoff =
+        fake_txn(%{
+          pending_transaction_id: "pending-dateto",
+          date: ~D[2026-04-01]
+        })
+
+      result2 =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          resolved_within_cutoff,
+          tx_params,
+          []
+        )
+
+      assert length(result2.results) == 2
+      assert result2.count == 10
+    end
   end
 end

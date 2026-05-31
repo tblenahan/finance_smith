@@ -357,7 +357,7 @@ defmodule FinanceSmithWeb.DashboardLiveTest do
   end
 
   describe "transaction:updated broadcast" do
-    test "swaps pending row to posted in-memory without a duplicate", %{conn: conn} do
+    test "refreshes view to show resolved transaction without a duplicate", %{conn: conn} do
       user = register_user!()
       plaid_item = BankingFixtures.create_plaid_item!(user)
       account = BankingFixtures.create_account!(plaid_item)
@@ -374,22 +374,22 @@ defmodule FinanceSmithWeb.DashboardLiveTest do
           amount: 450
         })
 
-      # Clear date filter so the pending transaction is visible.
+      # Clear date filter so the transaction is visible.
       {:ok, view, html} = conn |> log_in_user(user) |> live("/dashboard?date_from=2000-01-01")
 
       assert html =~ "Pending Coffee"
       assert html =~ "pending"
 
-      # Simulate the backend resolving the pending transaction. The resolved
-      # record has NotLoaded associations, matching what resolve_pending produces.
-      resolved_txn = %{
+      # Resolve the transaction in the DB (as the processor would), then broadcast.
+      resolved_txn =
         pending_txn
-        | plaid_transaction_id: posted_id,
-          pending_transaction_id: pending_id,
-          is_pending: false,
-          account: %Ash.NotLoaded{field: :account, type: :relationship},
-          meta_category: %Ash.NotLoaded{field: :meta_category, type: :relationship}
-      }
+        |> Ash.Changeset.for_update(:resolve_pending, %{
+          plaid_transaction_id: posted_id,
+          amount: 450,
+          date: Date.utc_today(),
+          pending_transaction_id: pending_id
+        })
+        |> Ash.update!(authorize?: false)
 
       notification = %Ash.Notifier.Notification{
         resource: FinanceSmith.Banking.Transaction,
