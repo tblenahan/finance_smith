@@ -270,6 +270,63 @@ defmodule FinanceSmith.DataLake.TransactionProcessorTest do
       assert txn.pending_transaction_id == missing_pending_id
       refute Map.has_key?(txn.metadata, "pending_transaction_id")
     end
+
+    test "destroys stale pending transaction when posted transaction already exists" do
+      user = register_user!()
+      {plaid_item, account} = build_plaid_item_with_account(user)
+
+      pending_id = "txn-stale-pending-#{System.unique_integer([:positive])}"
+      posted_id = "txn-existing-posted-#{System.unique_integer([:positive])}"
+
+      create_transaction!(account,
+        plaid_transaction_id: pending_id,
+        is_pending: true
+      )
+
+      posted =
+        create_transaction!(account,
+          plaid_transaction_id: posted_id,
+          amount: 1250,
+          is_pending: false
+        )
+
+      posted_payload =
+        account.plaid_account_id
+        |> txn_payload(posted_id, nil)
+        |> Map.merge(%{
+          "amount" => 18.50,
+          "pending_transaction_id" => pending_id
+        })
+
+      payload = %{
+        "added" => [posted_payload],
+        "modified" => [],
+        "removed" => []
+      }
+
+      assert :ok = TransactionProcessor.process(plaid_item, payload)
+
+      assert nil ==
+               Transaction
+               |> Ash.Query.filter(plaid_transaction_id == ^pending_id)
+               |> Ash.read_one!(authorize?: false)
+
+      updated_posted =
+        Transaction
+        |> Ash.Query.filter(plaid_transaction_id == ^posted_id)
+        |> Ash.read_one!(authorize?: false)
+
+      assert updated_posted.id == posted.id
+      assert updated_posted.amount == 1850
+      assert updated_posted.pending_transaction_id == pending_id
+
+      remaining =
+        Transaction
+        |> Ash.Query.filter(plaid_transaction_id in ^[pending_id, posted_id])
+        |> Ash.read!(authorize?: false)
+
+      assert length(remaining) == 1
+    end
   end
 
   describe "process/2 — PubSub notifications" do

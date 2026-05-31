@@ -71,9 +71,10 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     household_id = plaid_item.user.household_id
     account_lookup = build_account_lookup(plaid_item)
     category_lookup = resolve_category_mappings!(payload, household_id)
-    pending_lookup = build_pending_lookup(payload)
 
     FinanceSmith.Repo.transaction(fn ->
+      pending_lookup = build_pending_lookup(payload)
+
       {notifications, resolved_pending_ids} =
         {[], MapSet.new()}
         |> collect_transaction_notifications(
@@ -255,6 +256,10 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
       {List.wrap(notifs) ++ notifications,
        MapSet.put(resolved_pending_ids, pending_transaction.plaid_transaction_id)}
     else
+      if pending_transaction.plaid_transaction_id != posted_transaction_id do
+        destroy_pending_transaction!(pending_transaction)
+      end
+
       upsert_transaction(attrs, notifications, resolved_pending_ids)
     end
   end
@@ -291,6 +296,12 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     Transaction
     |> Ash.Query.filter(plaid_transaction_id == ^plaid_transaction_id)
     |> Ash.read_one!(authorize?: false)
+  end
+
+  defp destroy_pending_transaction!(pending_transaction) do
+    Transaction
+    |> Ash.Query.filter(id == ^pending_transaction.id)
+    |> Ash.bulk_destroy!(:destroy, %{}, authorize?: false, return_errors?: true)
   end
 
   defp remove_transactions!(removed_transactions, resolved_pending_ids) do
