@@ -10,6 +10,7 @@ defmodule FinanceSmithWeb.ConnectionLive do
   def mount(%{"plaid_item_id" => plaid_item_id}, _session, socket) do
     if connected?(socket) do
       FinanceSmithWeb.Endpoint.subscribe("transaction:created")
+      FinanceSmithWeb.Endpoint.subscribe("transaction:updated")
     end
 
     plaid_item = load_plaid_item(socket.assigns.current_user, plaid_item_id)
@@ -44,6 +45,21 @@ defmodule FinanceSmithWeb.ConnectionLive do
 
   def handle_info(%{topic: "transaction:created", payload: %Ash.Notifier.Notification{}}, socket) do
     {:noreply, refresh_view(socket)}
+  end
+
+  def handle_info(
+        %{topic: "transaction:updated", payload: %Ash.Notifier.Notification{data: updated_txn}},
+        socket
+      ) do
+    page =
+      TransactionLiveHelpers.apply_resolved_transaction(
+        socket.assigns.page,
+        updated_txn,
+        socket.assigns.tx_params,
+        socket.assigns.categories
+      )
+
+    {:noreply, assign(socket, :page, page)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}

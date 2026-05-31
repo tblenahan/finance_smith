@@ -56,6 +56,61 @@ defmodule FinanceSmithWeb.TransactionLiveHelpersTest do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
+  # --- Helpers for apply_resolved_transaction/4 unit tests --------------------
+
+  defp fake_account(name \\ "Checking") do
+    %{id: Ash.UUID.generate(), name: name, mask: "1234"}
+  end
+
+  defp fake_meta_category(id \\ nil, name \\ "Groceries") do
+    id = id || Ash.UUID.generate()
+    %{id: id, name: name}
+  end
+
+  defp fake_txn(overrides) do
+    base = %Transaction{
+      id: Ash.UUID.generate(),
+      plaid_transaction_id: "posted-#{System.unique_integer([:positive])}",
+      pending_transaction_id: nil,
+      amount: 1000,
+      date: ~D[2026-05-15],
+      merchant_name: "Test Merchant",
+      is_pending: false,
+      meta_category_id: nil,
+      account_id: Ash.UUID.generate(),
+      account: %Ash.NotLoaded{field: :account, type: :relationship},
+      meta_category: %Ash.NotLoaded{field: :meta_category, type: :relationship}
+    }
+
+    Map.merge(base, overrides)
+  end
+
+  defp fake_page(results, count \\ nil) do
+    %Ash.Page.Keyset{
+      results: results,
+      count: count || length(results),
+      more?: false,
+      before: nil,
+      after: nil,
+      limit: 25
+    }
+  end
+
+  defp default_tx_params(overrides \\ %{}) do
+    base = %{
+      sort_by: "date",
+      sort_dir: "desc",
+      after_cursor: nil,
+      before_cursor: nil,
+      date_from: ~D[2026-04-15],
+      date_to: nil,
+      meta_category_id: nil,
+      search: nil
+    }
+
+    Map.merge(base, overrides)
+  end
+
   describe "fetch_transactions/3" do
     test "returns {:ok, %Ash.Page.Keyset{}} on success" do
       user = register_user!()
@@ -211,6 +266,418 @@ defmodule FinanceSmithWeb.TransactionLiveHelpersTest do
 
       categories = TransactionLiveHelpers.list_categories(user2)
       assert categories == []
+    end
+  end
+
+  describe "apply_resolved_transaction/4" do
+    test "returns nil page unchanged" do
+      updated_txn = fake_txn(%{pending_transaction_id: "old-pending-id"})
+
+      assert nil ==
+               TransactionLiveHelpers.apply_resolved_transaction(
+                 nil,
+                 updated_txn,
+                 default_tx_params(),
+                 []
+               )
+    end
+
+    test "returns page unchanged when updated_txn has nil pending_transaction_id" do
+      pending_row = fake_txn(%{plaid_transaction_id: "pending-123", is_pending: true})
+      page = fake_page([pending_row])
+      updated_txn = fake_txn(%{pending_transaction_id: nil})
+
+      result =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          updated_txn,
+          default_tx_params(),
+          []
+        )
+
+      assert result.results == [pending_row]
+    end
+
+    test "returns page unchanged when updated_txn has empty string pending_transaction_id" do
+      pending_row = fake_txn(%{plaid_transaction_id: "pending-abc", is_pending: true})
+      page = fake_page([pending_row])
+      updated_txn = fake_txn(%{pending_transaction_id: ""})
+
+      result =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          updated_txn,
+          default_tx_params(),
+          []
+        )
+
+      assert result.results == [pending_row]
+    end
+
+    test "returns page unchanged when no row matches pending_transaction_id" do
+      row = fake_txn(%{plaid_transaction_id: "some-other-txn"})
+      page = fake_page([row])
+      updated_txn = fake_txn(%{pending_transaction_id: "no-match-id"})
+
+      result =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          updated_txn,
+          default_tx_params(),
+          []
+        )
+
+      assert result.results == [row]
+    end
+
+    test "swaps the pending row with the rebuilt posted struct" do
+      account = fake_account()
+
+      pending_row =
+        fake_txn(%{
+          plaid_transaction_id: "pending-txn-1",
+          is_pending: true,
+          amount: 1500,
+          merchant_name: "Coffee Shop",
+          account: account,
+          meta_category: nil,
+          meta_category_id: nil
+        })
+
+      page = fake_page([pending_row])
+
+      updated_txn =
+        fake_txn(%{
+          plaid_transaction_id: "posted-txn-1",
+          pending_transaction_id: "pending-txn-1",
+          is_pending: false,
+          amount: 1500,
+          merchant_name: "Coffee Shop",
+          meta_category_id: nil
+        })
+
+      result =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          updated_txn,
+          default_tx_params(),
+          []
+        )
+
+      assert length(result.results) == 1
+      [swapped] = result.results
+
+      # The posted txn's own fields are used
+      assert swapped.plaid_transaction_id == "posted-txn-1"
+      assert swapped.is_pending == false
+
+      # The old row's loaded account is reused (no NotLoaded crash)
+      assert swapped.account == account
+    end
+
+    test "reuses the old row's loaded account regardless of NotLoaded on updated_txn" do
+      account = fake_account("Savings Account")
+
+      pending_row =
+        fake_txn(%{
+          plaid_transaction_id: "pending-assoc-test",
+          is_pending: true,
+          account: account
+        })
+
+      page = fake_page([pending_row])
+
+      updated_txn =
+        fake_txn(%{
+          pending_transaction_id: "pending-assoc-test",
+          account: %Ash.NotLoaded{field: :account, type: :relationship}
+        })
+
+      result =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          updated_txn,
+          default_tx_params(),
+          []
+        )
+
+      [swapped] = result.results
+      assert swapped.account == account
+      refute match?(%Ash.NotLoaded{}, swapped.account)
+    end
+
+    test "looks up meta_category from categories list by id" do
+      cat_id = Ash.UUID.generate()
+      category = fake_meta_category(cat_id, "Dining")
+      categories = [fake_meta_category(), category, fake_meta_category()]
+
+      account = fake_account()
+
+      pending_row =
+        fake_txn(%{
+          plaid_transaction_id: "pending-cat-test",
+          is_pending: true,
+          account: account
+        })
+
+      page = fake_page([pending_row])
+
+      updated_txn =
+        fake_txn(%{
+          pending_transaction_id: "pending-cat-test",
+          meta_category_id: cat_id,
+          meta_category: %Ash.NotLoaded{field: :meta_category, type: :relationship}
+        })
+
+      result =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          updated_txn,
+          default_tx_params(),
+          categories
+        )
+
+      [swapped] = result.results
+      assert swapped.meta_category == category
+      assert swapped.meta_category.name == "Dining"
+    end
+
+    test "uses nil for meta_category when id not found in categories" do
+      account = fake_account()
+
+      pending_row =
+        fake_txn(%{
+          plaid_transaction_id: "pending-nocat",
+          is_pending: true,
+          account: account
+        })
+
+      page = fake_page([pending_row])
+
+      updated_txn =
+        fake_txn(%{
+          pending_transaction_id: "pending-nocat",
+          meta_category_id: Ash.UUID.generate()
+        })
+
+      result =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          updated_txn,
+          default_tx_params(),
+          []
+        )
+
+      [swapped] = result.results
+      assert is_nil(swapped.meta_category)
+    end
+
+    test "drops swapped row when it no longer matches date_from filter" do
+      account = fake_account()
+
+      pending_row =
+        fake_txn(%{
+          plaid_transaction_id: "pending-datefilter",
+          is_pending: true,
+          date: ~D[2026-05-01],
+          account: account
+        })
+
+      page = fake_page([pending_row])
+
+      # Posted transaction lands on an old date outside the filter window
+      updated_txn =
+        fake_txn(%{
+          pending_transaction_id: "pending-datefilter",
+          date: ~D[2026-03-01]
+        })
+
+      tx_params = default_tx_params(%{date_from: ~D[2026-04-15]})
+
+      result =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          updated_txn,
+          tx_params,
+          []
+        )
+
+      assert result.results == []
+    end
+
+    test "drops swapped row when it no longer matches category filter" do
+      cat_id = Ash.UUID.generate()
+      account = fake_account()
+
+      pending_row =
+        fake_txn(%{
+          plaid_transaction_id: "pending-catfilter",
+          is_pending: true,
+          meta_category_id: cat_id,
+          account: account
+        })
+
+      page = fake_page([pending_row])
+
+      # Posted transaction resolved to a different category
+      different_cat_id = Ash.UUID.generate()
+
+      updated_txn =
+        fake_txn(%{
+          pending_transaction_id: "pending-catfilter",
+          meta_category_id: different_cat_id
+        })
+
+      tx_params = default_tx_params(%{meta_category_id: cat_id})
+
+      result =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          updated_txn,
+          tx_params,
+          []
+        )
+
+      assert result.results == []
+    end
+
+    test "drops swapped row when merchant name no longer matches search filter" do
+      account = fake_account()
+
+      pending_row =
+        fake_txn(%{
+          plaid_transaction_id: "pending-search",
+          is_pending: true,
+          merchant_name: "Coffee Shop",
+          account: account
+        })
+
+      page = fake_page([pending_row])
+
+      updated_txn =
+        fake_txn(%{
+          pending_transaction_id: "pending-search",
+          merchant_name: "Gas Station"
+        })
+
+      tx_params = default_tx_params(%{search: "coffee"})
+
+      result =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          updated_txn,
+          tx_params,
+          []
+        )
+
+      assert result.results == []
+    end
+
+    test "keeps swapped row when merchant name matches search case-insensitively" do
+      account = fake_account()
+
+      pending_row =
+        fake_txn(%{
+          plaid_transaction_id: "pending-case",
+          is_pending: true,
+          merchant_name: "Coffee Shop",
+          account: account
+        })
+
+      page = fake_page([pending_row])
+
+      updated_txn =
+        fake_txn(%{
+          pending_transaction_id: "pending-case",
+          merchant_name: "COFFEE SHOP"
+        })
+
+      tx_params = default_tx_params(%{search: "coffee"})
+
+      result =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          updated_txn,
+          tx_params,
+          []
+        )
+
+      assert length(result.results) == 1
+    end
+
+    test "preserves other rows untouched when one row is swapped" do
+      account = fake_account()
+
+      pending_row =
+        fake_txn(%{
+          plaid_transaction_id: "pending-multi",
+          is_pending: true,
+          account: account
+        })
+
+      other_row_1 = fake_txn(%{plaid_transaction_id: "other-1"})
+      other_row_2 = fake_txn(%{plaid_transaction_id: "other-2"})
+
+      page = fake_page([other_row_1, pending_row, other_row_2])
+
+      updated_txn =
+        fake_txn(%{
+          plaid_transaction_id: "posted-multi",
+          pending_transaction_id: "pending-multi"
+        })
+
+      result =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          updated_txn,
+          default_tx_params(),
+          []
+        )
+
+      assert length(result.results) == 3
+      ids = Enum.map(result.results, & &1.plaid_transaction_id)
+      assert "other-1" in ids
+      assert "other-2" in ids
+      assert "posted-multi" in ids
+      refute "pending-multi" in ids
+    end
+
+    test "preserves page struct fields (count, more?, cursors)" do
+      account = fake_account()
+
+      pending_row =
+        fake_txn(%{
+          plaid_transaction_id: "pending-struct",
+          is_pending: true,
+          account: account
+        })
+
+      page = %Ash.Page.Keyset{
+        results: [pending_row],
+        count: 42,
+        more?: true,
+        before: "some-cursor",
+        after: nil,
+        limit: 25
+      }
+
+      updated_txn =
+        fake_txn(%{
+          pending_transaction_id: "pending-struct"
+        })
+
+      result =
+        TransactionLiveHelpers.apply_resolved_transaction(
+          page,
+          updated_txn,
+          default_tx_params(),
+          []
+        )
+
+      assert result.count == 42
+      assert result.more? == true
+      assert result.before == "some-cursor"
+      assert result.limit == 25
     end
   end
 end

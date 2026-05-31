@@ -355,4 +355,70 @@ defmodule FinanceSmithWeb.DashboardLiveTest do
       assert html =~ "The link was not completed"
     end
   end
+
+  describe "transaction:updated broadcast" do
+    test "swaps pending row to posted in-memory without a duplicate", %{conn: conn} do
+      user = register_user!()
+      plaid_item = BankingFixtures.create_plaid_item!(user)
+      account = BankingFixtures.create_account!(plaid_item)
+
+      pending_id = "pending-lv-#{System.unique_integer([:positive])}"
+      posted_id = "posted-lv-#{System.unique_integer([:positive])}"
+
+      pending_txn =
+        BankingFixtures.create_transaction!(account, %{
+          plaid_transaction_id: pending_id,
+          is_pending: true,
+          merchant_name: "Pending Coffee",
+          date: Date.utc_today(),
+          amount: 450
+        })
+
+      # Clear date filter so the pending transaction is visible.
+      {:ok, view, html} = conn |> log_in_user(user) |> live("/dashboard?date_from=2000-01-01")
+
+      assert html =~ "Pending Coffee"
+      assert html =~ "pending"
+
+      # Simulate the backend resolving the pending transaction. The resolved
+      # record has NotLoaded associations, matching what resolve_pending produces.
+      resolved_txn = %{
+        pending_txn
+        | plaid_transaction_id: posted_id,
+          pending_transaction_id: pending_id,
+          is_pending: false,
+          account: %Ash.NotLoaded{field: :account, type: :relationship},
+          meta_category: %Ash.NotLoaded{field: :meta_category, type: :relationship}
+      }
+
+      notification = %Ash.Notifier.Notification{
+        resource: FinanceSmith.Banking.Transaction,
+        action: %{name: :resolve_pending},
+        data: resolved_txn
+      }
+
+      send(view.pid, %{topic: "transaction:updated", payload: notification})
+
+      html = render(view)
+
+      # The posted row is still rendered.
+      assert html =~ "Pending Coffee"
+
+      # The "pending" badge is gone.
+      pending_badge_count =
+        html
+        |> String.split("Pending Coffee")
+        |> Enum.drop(1)
+        |> List.first("")
+        |> then(&Regex.scan(~r/pending/, &1))
+        |> length()
+
+      assert pending_badge_count == 0,
+             "Expected no 'pending' badge after resolve, but found one"
+
+      # Exactly one row for this merchant — no duplicate.
+      row_count = length(Regex.scan(~r/Pending Coffee/, html))
+      assert row_count == 1, "Expected exactly 1 row for 'Pending Coffee', got #{row_count}"
+    end
+  end
 end
