@@ -501,17 +501,21 @@ defmodule FinanceSmithWeb.DashboardLive do
     inflow =
       Enum.map(dates, fn d ->
         {i, _o} = Map.get(buckets, d, {0, 0})
-        i / 100.0
+        chart_series_point(i / 100.0)
       end)
 
     outflow =
       Enum.map(dates, fn d ->
         {_i, o} = Map.get(buckets, d, {0, 0})
-        o / 100.0
+        chart_series_point(o / 100.0)
       end)
 
     %{labels: labels, inflow: inflow, outflow: outflow}
   end
+
+  # ECharts still plots y=0 for quiet days (line continuity) but hides the dot.
+  defp chart_series_point(0.0), do: %{value: 0.0, symbol: "none", symbolSize: 0}
+  defp chart_series_point(value) when is_float(value), do: value
 
   defp build_outflow_categories(rows) do
     rows

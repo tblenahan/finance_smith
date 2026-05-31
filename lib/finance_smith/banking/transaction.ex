@@ -22,6 +22,10 @@ defmodule FinanceSmith.Banking.Transaction do
         where: "is_pending = true",
         name: "transactions_pending_by_account_index"
 
+      index [:pending_transaction_id],
+        where: "pending_transaction_id IS NOT NULL",
+        name: "transactions_pending_transaction_id_index"
+
       index [:metadata], using: "GIN", name: "transactions_metadata_gin_index"
 
       index [:date, :amount], name: "transactions_date_amount_index"
@@ -37,6 +41,22 @@ defmodule FinanceSmith.Banking.Transaction do
 
   actions do
     defaults [:read, :destroy, create: :*, update: :*]
+
+    update :resolve_pending do
+      accept [
+        :plaid_transaction_id,
+        :amount,
+        :date,
+        :merchant_name,
+        :website,
+        :personal_finance_category,
+        :meta_category_id,
+        :metadata,
+        :pending_transaction_id
+      ]
+
+      change set_attribute(:is_pending, false)
+    end
 
     read :for_chart do
       description """
@@ -126,6 +146,7 @@ defmodule FinanceSmith.Banking.Transaction do
     prefix "transaction"
 
     publish_all :create, ["created"]
+    publish :resolve_pending, ["updated"]
   end
 
   attributes do
@@ -148,6 +169,8 @@ defmodule FinanceSmith.Banking.Transaction do
     attribute :personal_finance_category, :string, public?: true
 
     attribute :website, :string, public?: true
+
+    attribute :pending_transaction_id, :string, public?: true
 
     attribute :is_pending, :boolean do
       allow_nil? false

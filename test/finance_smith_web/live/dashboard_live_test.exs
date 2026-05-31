@@ -263,6 +263,39 @@ defmodule FinanceSmithWeb.DashboardLiveTest do
   end
 
   describe "chart data" do
+    test "cashflow line chart hides symbols on zero days but keeps line continuity", %{
+      conn: conn
+    } do
+      user = register_user!()
+      plaid_item = BankingFixtures.create_plaid_item!(user)
+      account = BankingFixtures.create_account!(plaid_item)
+
+      create_chart_transaction!(account, %{
+        amount: 5000,
+        date: Date.utc_today(),
+        merchant_name: "Today Outflow"
+      })
+
+      create_chart_transaction!(account, %{
+        amount: -3000,
+        date: Date.add(Date.utc_today(), -1),
+        merchant_name: "Yesterday Inflow"
+      })
+
+      {:ok, view, _html} = conn |> log_in_user(user) |> live_dashboard()
+
+      assert_push_event(view, "update-chart-cashflow-line-chart", %{
+        series: [%{data: inflow_data}, %{data: outflow_data}]
+      })
+
+      hidden = %{value: 0.0, symbol: "none", symbolSize: 0}
+
+      assert Enum.count(inflow_data, &(&1 == hidden)) == length(inflow_data) - 1
+      assert Enum.count(outflow_data, &(&1 == hidden)) == length(outflow_data) - 1
+      assert 30.0 in inflow_data
+      assert 50.0 in outflow_data
+    end
+
     test "outflow pie chart separates named, uncategorized, and no-category transactions", %{
       conn: conn
     } do

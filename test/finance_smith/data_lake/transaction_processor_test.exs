@@ -153,6 +153,125 @@ defmodule FinanceSmith.DataLake.TransactionProcessorTest do
     end
   end
 
+  describe "process/2 — pending transaction resolution" do
+    test "promotes an existing pending transaction to the posted transaction and skips removed cleanup" do
+      user = register_user!()
+      {plaid_item, account} = build_plaid_item_with_account(user)
+
+      pending_id = "txn-pending-#{System.unique_integer([:positive])}"
+      posted_id = "txn-posted-#{System.unique_integer([:positive])}"
+
+      pending =
+        create_transaction!(account,
+          plaid_transaction_id: pending_id,
+          amount: 1250,
+          date: ~D[2026-05-01],
+          merchant_name: "Pending Merchant",
+          is_pending: true
+        )
+
+      posted_payload =
+        account.plaid_account_id
+        |> txn_payload(posted_id, nil)
+        |> Map.merge(%{
+          "amount" => 12.75,
+          "date" => "2026-05-02",
+          "merchant_name" => "Posted Merchant",
+          "pending_transaction_id" => pending_id
+        })
+
+      payload = %{
+        "added" => [posted_payload],
+        "modified" => [],
+        "removed" => [%{"transaction_id" => pending_id}]
+      }
+
+      assert :ok = TransactionProcessor.process(plaid_item, payload)
+
+      assert nil ==
+               Transaction
+               |> Ash.Query.filter(plaid_transaction_id == ^pending_id)
+               |> Ash.read_one!(authorize?: false)
+
+      resolved =
+        Transaction
+        |> Ash.Query.filter(plaid_transaction_id == ^posted_id)
+        |> Ash.read_one!(authorize?: false)
+
+      assert resolved.id == pending.id
+      assert resolved.amount == 1275
+      assert resolved.date == ~D[2026-05-02]
+      assert resolved.merchant_name == "Posted Merchant"
+      assert resolved.is_pending == false
+      assert resolved.pending_transaction_id == pending_id
+    end
+
+    test "resolves pending transactions from modified payloads too" do
+      user = register_user!()
+      {plaid_item, account} = build_plaid_item_with_account(user)
+
+      pending_id = "txn-modified-pending-#{System.unique_integer([:positive])}"
+      posted_id = "txn-modified-posted-#{System.unique_integer([:positive])}"
+
+      pending =
+        create_transaction!(account,
+          plaid_transaction_id: pending_id,
+          is_pending: true
+        )
+
+      posted_payload =
+        account.plaid_account_id
+        |> txn_payload(posted_id, nil)
+        |> Map.put("pending_transaction_id", pending_id)
+
+      payload = %{
+        "added" => [],
+        "modified" => [posted_payload],
+        "removed" => [%{"transaction_id" => pending_id}]
+      }
+
+      assert :ok = TransactionProcessor.process(plaid_item, payload)
+
+      resolved =
+        Transaction
+        |> Ash.Query.filter(plaid_transaction_id == ^posted_id)
+        |> Ash.read_one!(authorize?: false)
+
+      assert resolved.id == pending.id
+      assert resolved.is_pending == false
+      assert resolved.pending_transaction_id == pending_id
+    end
+
+    test "falls back to standard upsert when pending_transaction_id has no matching row" do
+      user = register_user!()
+      {plaid_item, account} = build_plaid_item_with_account(user)
+
+      missing_pending_id = "txn-missing-pending-#{System.unique_integer([:positive])}"
+      posted_id = "txn-fallback-posted-#{System.unique_integer([:positive])}"
+
+      posted_payload =
+        account.plaid_account_id
+        |> txn_payload(posted_id, nil)
+        |> Map.put("pending_transaction_id", missing_pending_id)
+
+      payload = %{
+        "added" => [posted_payload],
+        "modified" => [],
+        "removed" => []
+      }
+
+      assert :ok = TransactionProcessor.process(plaid_item, payload)
+
+      txn =
+        Transaction
+        |> Ash.Query.filter(plaid_transaction_id == ^posted_id)
+        |> Ash.read_one!(authorize?: false)
+
+      assert txn.pending_transaction_id == missing_pending_id
+      refute Map.has_key?(txn.metadata, "pending_transaction_id")
+    end
+  end
+
   describe "process/2 — PubSub notifications" do
     test "broadcasts transaction:created after inserting transactions" do
       user = register_user!()
@@ -171,6 +290,34 @@ defmodule FinanceSmith.DataLake.TransactionProcessorTest do
       assert :ok = TransactionProcessor.process(plaid_item, payload)
 
       assert_receive %{topic: "transaction:created", payload: %Ash.Notifier.Notification{}},
+                     1_000
+    end
+
+    test "broadcasts transaction:updated after resolving a pending transaction" do
+      user = register_user!()
+      {plaid_item, account} = build_plaid_item_with_account(user)
+
+      FinanceSmithWeb.Endpoint.subscribe("transaction:updated")
+
+      pending_id = "txn-update-pending-#{System.unique_integer([:positive])}"
+      posted_id = "txn-update-posted-#{System.unique_integer([:positive])}"
+
+      create_transaction!(account, plaid_transaction_id: pending_id, is_pending: true)
+
+      posted_payload =
+        account.plaid_account_id
+        |> txn_payload(posted_id, nil)
+        |> Map.put("pending_transaction_id", pending_id)
+
+      payload = %{
+        "added" => [posted_payload],
+        "modified" => [],
+        "removed" => []
+      }
+
+      assert :ok = TransactionProcessor.process(plaid_item, payload)
+
+      assert_receive %{topic: "transaction:updated", payload: %Ash.Notifier.Notification{}},
                      1_000
     end
   end
