@@ -199,6 +199,22 @@ defmodule FinanceSmith.Banking.PoliciesTest do
       assert {:error, %Ash.Error.Forbidden{}} =
                txn |> Ash.Changeset.for_destroy(:destroy) |> Ash.destroy(actor: user)
     end
+
+    test "regular user cannot invoke :resolve_pending" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account = create_account!(plaid_item)
+      txn = create_transaction!(account, %{is_pending: true})
+
+      assert {:error, %Ash.Error.Forbidden{}} =
+               txn
+               |> Ash.Changeset.for_update(:resolve_pending, %{
+                 plaid_transaction_id: "posted-#{System.unique_integer([:positive])}",
+                 amount: txn.amount,
+                 date: txn.date
+               })
+               |> Ash.update(actor: user)
+    end
   end
 
   describe "Transaction list action search" do

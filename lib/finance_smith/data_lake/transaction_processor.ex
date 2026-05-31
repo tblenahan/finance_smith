@@ -28,13 +28,15 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
      - Bulk-upsert new mappings, then re-read from DB so the lookup reflects
        the actual DB winner (race-safe under concurrent Oban workers).
   4. Run all transaction DB operations inside a single Repo transaction:
-     - `added` / `modified` → upsert on `:unique_plaid_id`, stamping
-       `meta_category_id` from the resolved lookup, collecting
+     - `added` / `modified` → resolve pending records in-place when Plaid
+       provides `pending_transaction_id`, otherwise upsert on `:unique_plaid_id`,
+       stamping `meta_category_id` from the resolved lookup and collecting
        `Ash.Notifier.Notification` structs via `return_notifications?: true`
-     - `removed` → bulk destroy by `plaid_transaction_id`
+     - `removed` → bulk destroy by `plaid_transaction_id`, skipping pending IDs
+       that were already promoted in-place during the same batch
   5. After the transaction commits, flush the collected notifications via
      `Ash.Notifier.notify/1` so PubSub subscribers (e.g. the Dashboard LiveView)
-     receive `"transaction:created"` broadcasts without missed-notification warnings.
+     receive transaction broadcasts without missed-notification warnings.
   6. Return `:ok` on success or raise on failure.
 
   ## Amount convention
@@ -71,18 +73,25 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     category_lookup = resolve_category_mappings!(payload, household_id)
 
     FinanceSmith.Repo.transaction(fn ->
-      notifications =
-        []
-        |> collect_upsert_notifications(payload["added"] || [], account_lookup, category_lookup)
-        |> collect_upsert_notifications(
+      pending_lookup = build_pending_lookup(payload)
+
+      {notifications, resolved_pending_ids} =
+        {[], MapSet.new()}
+        |> collect_transaction_notifications(
+          payload["added"] || [],
+          account_lookup,
+          category_lookup,
+          pending_lookup
+        )
+        |> collect_transaction_notifications(
           payload["modified"] || [],
           account_lookup,
-          category_lookup
+          category_lookup,
+          pending_lookup
         )
-        |> Enum.reverse()
 
-      remove_transactions!(payload["removed"] || [])
-      notifications
+      remove_transactions!(payload["removed"] || [], resolved_pending_ids)
+      Enum.reverse(notifications)
     end)
     |> case do
       {:ok, notifications} when is_list(notifications) ->
@@ -162,25 +171,39 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   # --- Transaction writes ---------------------------------------------------
 
-  defp collect_upsert_notifications(acc, transactions, account_lookup, category_lookup) do
-    Enum.reduce(transactions, acc, fn txn, acc ->
+  defp build_pending_lookup(payload) do
+    pending_ids =
+      (payload["added"] || [])
+      |> Kernel.++(payload["modified"] || [])
+      |> Enum.map(& &1["pending_transaction_id"])
+      |> Enum.filter(&(is_binary(&1) and &1 != ""))
+      |> Enum.uniq()
+
+    if pending_ids == [] do
+      %{}
+    else
+      Transaction
+      |> Ash.Query.filter(plaid_transaction_id in ^pending_ids)
+      |> Ash.read!(authorize?: false)
+      |> Map.new(&{&1.plaid_transaction_id, &1})
+    end
+  end
+
+  defp collect_transaction_notifications(
+         acc,
+         transactions,
+         account_lookup,
+         category_lookup,
+         pending_lookup
+       ) do
+    Enum.reduce(transactions, acc, fn txn, {notifications, resolved_pending_ids} = acc ->
       plaid_account_id = txn["account_id"]
 
       case Map.fetch(account_lookup, plaid_account_id) do
         {:ok, account_id} ->
           attrs = build_transaction_attrs(txn, account_id, category_lookup)
 
-          {_record, notifs} =
-            Transaction
-            |> Ash.Changeset.for_create(:create, attrs)
-            |> Ash.create!(
-              upsert?: true,
-              upsert_identity: :unique_plaid_id,
-              authorize?: false,
-              return_notifications?: true
-            )
-
-          List.wrap(notifs) ++ acc
+          process_transaction(attrs, notifications, resolved_pending_ids, pending_lookup)
 
         :error ->
           Logger.warning(
@@ -192,13 +215,108 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     end)
   end
 
-  defp remove_transactions!(removed_transactions) do
+  defp process_transaction(
+         %{pending_transaction_id: pending_transaction_id} = attrs,
+         notifications,
+         resolved_pending_ids,
+         pending_lookup
+       )
+       when is_binary(pending_transaction_id) and pending_transaction_id != "" do
+    if MapSet.member?(resolved_pending_ids, pending_transaction_id) do
+      upsert_transaction(attrs, notifications, resolved_pending_ids)
+    else
+      case Map.get(pending_lookup, pending_transaction_id) do
+        nil ->
+          upsert_transaction(attrs, notifications, resolved_pending_ids)
+
+        pending_transaction ->
+          maybe_resolve_pending_transaction(
+            pending_transaction,
+            attrs,
+            notifications,
+            resolved_pending_ids
+          )
+      end
+    end
+  end
+
+  defp process_transaction(attrs, notifications, resolved_pending_ids, _pending_lookup) do
+    upsert_transaction(attrs, notifications, resolved_pending_ids)
+  end
+
+  defp maybe_resolve_pending_transaction(
+         pending_transaction,
+         %{plaid_transaction_id: posted_transaction_id} = attrs,
+         notifications,
+         resolved_pending_ids
+       ) do
+    if pending_transaction.plaid_transaction_id != posted_transaction_id and
+         is_nil(find_transaction_by_plaid_id(posted_transaction_id)) do
+      {_record, notifs} =
+        pending_transaction
+        |> Ash.Changeset.for_update(:resolve_pending, resolve_pending_attrs(attrs))
+        |> Ash.update!(authorize?: false, return_notifications?: true)
+
+      {List.wrap(notifs) ++ notifications,
+       MapSet.put(resolved_pending_ids, pending_transaction.plaid_transaction_id)}
+    else
+      if pending_transaction.plaid_transaction_id != posted_transaction_id do
+        destroy_pending_transaction!(pending_transaction)
+      end
+
+      upsert_transaction(attrs, notifications, resolved_pending_ids)
+    end
+  end
+
+  defp resolve_pending_attrs(attrs) do
+    Map.take(attrs, [
+      :plaid_transaction_id,
+      :amount,
+      :date,
+      :merchant_name,
+      :website,
+      :personal_finance_category,
+      :meta_category_id,
+      :metadata,
+      :pending_transaction_id
+    ])
+  end
+
+  defp upsert_transaction(attrs, notifications, resolved_pending_ids) do
+    {_record, notifs} =
+      Transaction
+      |> Ash.Changeset.for_create(:create, attrs)
+      |> Ash.create!(
+        upsert?: true,
+        upsert_identity: :unique_plaid_id,
+        authorize?: false,
+        return_notifications?: true
+      )
+
+    {List.wrap(notifs) ++ notifications, resolved_pending_ids}
+  end
+
+  defp find_transaction_by_plaid_id(plaid_transaction_id) do
+    Transaction
+    |> Ash.Query.filter(plaid_transaction_id == ^plaid_transaction_id)
+    |> Ash.read_one!(authorize?: false)
+  end
+
+  defp destroy_pending_transaction!(pending_transaction) do
+    Transaction
+    |> Ash.Query.filter(id == ^pending_transaction.id)
+    |> Ash.bulk_destroy!(:destroy, %{}, authorize?: false, return_errors?: true)
+  end
+
+  defp remove_transactions!(removed_transactions, resolved_pending_ids) do
     Enum.each(removed_transactions, fn txn ->
       plaid_transaction_id = txn["transaction_id"]
 
-      Transaction
-      |> Ash.Query.filter(plaid_transaction_id == ^plaid_transaction_id)
-      |> Ash.bulk_destroy!(:destroy, %{}, authorize?: false, return_errors?: true)
+      unless MapSet.member?(resolved_pending_ids, plaid_transaction_id) do
+        Transaction
+        |> Ash.Query.filter(plaid_transaction_id == ^plaid_transaction_id)
+        |> Ash.bulk_destroy!(:destroy, %{}, authorize?: false, return_errors?: true)
+      end
     end)
   end
 
@@ -211,6 +329,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     merchant_name
     website
     pending
+    pending_transaction_id
     account_id
     personal_finance_category
   )
@@ -238,6 +357,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
       personal_finance_category: personal_finance_category,
       meta_category_id: category_lookup[personal_finance_category],
       is_pending: txn["pending"] || false,
+      pending_transaction_id: txn["pending_transaction_id"],
       account_id: account_id,
       metadata: metadata
     }

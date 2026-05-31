@@ -22,6 +22,7 @@ defmodule FinanceSmithWeb.DashboardLive do
     if connected?(socket) do
       FinanceSmithWeb.Endpoint.subscribe("plaid_item:sync_complete:#{user.id}")
       FinanceSmithWeb.Endpoint.subscribe("transaction:created")
+      FinanceSmithWeb.Endpoint.subscribe("transaction:updated")
     end
 
     kpis = fetch_scoped_kpis(scope, user)
@@ -173,6 +174,10 @@ defmodule FinanceSmithWeb.DashboardLive do
   end
 
   def handle_info(%{topic: "transaction:created", payload: %Ash.Notifier.Notification{}}, socket) do
+    {:noreply, refresh_scope_data(socket, socket.assigns.view_scope)}
+  end
+
+  def handle_info(%{topic: "transaction:updated", payload: %Ash.Notifier.Notification{}}, socket) do
     {:noreply, refresh_scope_data(socket, socket.assigns.view_scope)}
   end
 
@@ -501,17 +506,21 @@ defmodule FinanceSmithWeb.DashboardLive do
     inflow =
       Enum.map(dates, fn d ->
         {i, _o} = Map.get(buckets, d, {0, 0})
-        i / 100.0
+        chart_series_point(i / 100.0)
       end)
 
     outflow =
       Enum.map(dates, fn d ->
         {_i, o} = Map.get(buckets, d, {0, 0})
-        o / 100.0
+        chart_series_point(o / 100.0)
       end)
 
     %{labels: labels, inflow: inflow, outflow: outflow}
   end
+
+  # ECharts still plots y=0 for quiet days (line continuity) but hides the dot.
+  defp chart_series_point(0.0), do: %{value: 0.0, symbol: "none", symbolSize: 0}
+  defp chart_series_point(value) when is_float(value), do: value
 
   defp build_outflow_categories(rows) do
     rows

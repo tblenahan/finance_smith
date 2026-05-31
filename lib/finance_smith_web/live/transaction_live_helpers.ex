@@ -113,8 +113,6 @@ defmodule FinanceSmithWeb.TransactionLiveHelpers do
     end
   end
 
-  # --- Private helpers --------------------------------------------------------
-
   defp valid_sort_by(field) when field in @valid_sort_by_fields, do: field
   defp valid_sort_by(_), do: "date"
 

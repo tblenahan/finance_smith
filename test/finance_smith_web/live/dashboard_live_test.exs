@@ -263,6 +263,39 @@ defmodule FinanceSmithWeb.DashboardLiveTest do
   end
 
   describe "chart data" do
+    test "cashflow line chart hides symbols on zero days but keeps line continuity", %{
+      conn: conn
+    } do
+      user = register_user!()
+      plaid_item = BankingFixtures.create_plaid_item!(user)
+      account = BankingFixtures.create_account!(plaid_item)
+
+      create_chart_transaction!(account, %{
+        amount: 5000,
+        date: Date.utc_today(),
+        merchant_name: "Today Outflow"
+      })
+
+      create_chart_transaction!(account, %{
+        amount: -3000,
+        date: Date.add(Date.utc_today(), -1),
+        merchant_name: "Yesterday Inflow"
+      })
+
+      {:ok, view, _html} = conn |> log_in_user(user) |> live_dashboard()
+
+      assert_push_event(view, "update-chart-cashflow-line-chart", %{
+        series: [%{data: inflow_data}, %{data: outflow_data}]
+      })
+
+      hidden = %{value: 0.0, symbol: "none", symbolSize: 0}
+
+      assert Enum.count(inflow_data, &(&1 == hidden)) == length(inflow_data) - 1
+      assert Enum.count(outflow_data, &(&1 == hidden)) == length(outflow_data) - 1
+      assert 30.0 in inflow_data
+      assert 50.0 in outflow_data
+    end
+
     test "outflow pie chart separates named, uncategorized, and no-category transactions", %{
       conn: conn
     } do
@@ -320,6 +353,72 @@ defmodule FinanceSmithWeb.DashboardLiveTest do
         })
 
       assert html =~ "The link was not completed"
+    end
+  end
+
+  describe "transaction:updated broadcast" do
+    test "refreshes view to show resolved transaction without a duplicate", %{conn: conn} do
+      user = register_user!()
+      plaid_item = BankingFixtures.create_plaid_item!(user)
+      account = BankingFixtures.create_account!(plaid_item)
+
+      pending_id = "pending-lv-#{System.unique_integer([:positive])}"
+      posted_id = "posted-lv-#{System.unique_integer([:positive])}"
+
+      pending_txn =
+        BankingFixtures.create_transaction!(account, %{
+          plaid_transaction_id: pending_id,
+          is_pending: true,
+          merchant_name: "Pending Coffee",
+          date: Date.utc_today(),
+          amount: 450
+        })
+
+      # Clear date filter so the transaction is visible.
+      {:ok, view, html} = conn |> log_in_user(user) |> live("/dashboard?date_from=2000-01-01")
+
+      assert html =~ "Pending Coffee"
+      assert html =~ "pending"
+
+      # Resolve the transaction in the DB (as the processor would), then broadcast.
+      resolved_txn =
+        pending_txn
+        |> Ash.Changeset.for_update(:resolve_pending, %{
+          plaid_transaction_id: posted_id,
+          amount: 450,
+          date: Date.utc_today(),
+          pending_transaction_id: pending_id
+        })
+        |> Ash.update!(authorize?: false)
+
+      notification = %Ash.Notifier.Notification{
+        resource: FinanceSmith.Banking.Transaction,
+        action: %{name: :resolve_pending},
+        data: resolved_txn
+      }
+
+      send(view.pid, %{topic: "transaction:updated", payload: notification})
+
+      html = render(view)
+
+      # The posted row is still rendered.
+      assert html =~ "Pending Coffee"
+
+      # The "pending" badge is gone.
+      pending_badge_count =
+        html
+        |> String.split("Pending Coffee")
+        |> Enum.drop(1)
+        |> List.first("")
+        |> then(&Regex.scan(~r/pending/, &1))
+        |> length()
+
+      assert pending_badge_count == 0,
+             "Expected no 'pending' badge after resolve, but found one"
+
+      # Exactly one row for this merchant — no duplicate.
+      row_count = length(Regex.scan(~r/Pending Coffee/, html))
+      assert row_count == 1, "Expected exactly 1 row for 'Pending Coffee', got #{row_count}"
     end
   end
 end

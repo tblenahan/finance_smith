@@ -11,6 +11,7 @@ defmodule FinanceSmithWeb.AccountLive do
   def mount(%{"account_id" => account_id}, _session, socket) do
     if connected?(socket) do
       FinanceSmithWeb.Endpoint.subscribe("transaction:created")
+      FinanceSmithWeb.Endpoint.subscribe("transaction:updated")
     end
 
     account = load_account(socket.assigns.current_user, account_id)
@@ -44,6 +45,10 @@ defmodule FinanceSmithWeb.AccountLive do
   end
 
   def handle_info(%{topic: "transaction:created", payload: %Ash.Notifier.Notification{}}, socket) do
+    {:noreply, refresh_view(socket)}
+  end
+
+  def handle_info(%{topic: "transaction:updated", payload: %Ash.Notifier.Notification{}}, socket) do
     {:noreply, refresh_view(socket)}
   end
 
