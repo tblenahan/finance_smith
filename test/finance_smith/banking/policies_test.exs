@@ -293,6 +293,93 @@ defmodule FinanceSmith.Banking.PoliciesTest do
 
       assert is_nil(nil_institution_account.duplicate_of_id)
     end
+
+    test "does not soft-link to hidden or quarantined canonical accounts" do
+      user = register_user!()
+      first_item = create_plaid_item!(user, %{institution_name: "Chase"})
+      second_item = create_plaid_item!(user, %{institution_name: "Chase"})
+
+      _hidden_canonical =
+        upsert_plaid_account!(first_item,
+          plaid_account_id: "hidden-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "credit card"
+        )
+        |> Ash.Changeset.for_update(:update, %{}, authorize?: false)
+        |> Ash.Changeset.force_change_attribute(:status, :hidden)
+        |> Ash.update!(authorize?: false)
+
+      reconnect =
+        upsert_plaid_account!(second_item,
+          plaid_account_id: "reconnect-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "credit card"
+        )
+
+      assert is_nil(reconnect.duplicate_of_id)
+    end
+
+    test "soft-links when canonical subtype differs by case" do
+      user = register_user!()
+      first_item = create_plaid_item!(user, %{institution_name: "Chase"})
+      second_item = create_plaid_item!(user, %{institution_name: "Chase"})
+
+      canonical =
+        upsert_plaid_account!(first_item,
+          plaid_account_id: "canonical-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "Credit Card"
+        )
+
+      duplicate =
+        upsert_plaid_account!(second_item,
+          plaid_account_id: "duplicate-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "credit card"
+        )
+
+      assert duplicate.duplicate_of_id == canonical.id
+    end
+
+    test "concurrent upserts produce a single canonical account" do
+      user = register_user!()
+      first_item = create_plaid_item!(user, %{institution_name: "Chase"})
+      second_item = create_plaid_item!(user, %{institution_name: "Chase"})
+      parent = self()
+
+      upsert = fn item, suffix ->
+        fn ->
+          Ecto.Adapters.SQL.Sandbox.allow(FinanceSmith.Repo, parent, self())
+
+          upsert_plaid_account!(item,
+            plaid_account_id: "concurrent-#{suffix}-#{System.unique_integer([:positive])}",
+            mask: "7777",
+            subtype: "credit card"
+          )
+        end
+      end
+
+      task1 = Task.async(upsert.(first_item, "a"))
+      task2 = Task.async(upsert.(second_item, "b"))
+
+      account1 = Task.await(task1)
+      account2 = Task.await(task2)
+
+      account1 = Ash.get!(Account, account1.id, authorize?: false)
+      account2 = Ash.get!(Account, account2.id, authorize?: false)
+
+      canonical_count = Enum.count([account1, account2], &is_nil(&1.duplicate_of_id))
+      assert canonical_count == 1
+
+      {canonical, duplicate} =
+        if is_nil(account1.duplicate_of_id) do
+          {account1, account2}
+        else
+          {account2, account1}
+        end
+
+      assert duplicate.duplicate_of_id == canonical.id
+    end
   end
 
   describe "duplicate account KPI aggregates" do

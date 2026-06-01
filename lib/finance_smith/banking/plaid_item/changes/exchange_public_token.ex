@@ -15,7 +15,7 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
   use Ash.Resource.Change
 
   alias AshCloak
-  alias FinanceSmith.Banking.{Account, PlaidBalances, PlaidItem}
+  alias FinanceSmith.Banking.{Account, PlaidBalances, PlaidItem, PlaidStrings}
   alias FinanceSmith.DataLake.SyncWorker
 
   require Ash.Query
@@ -104,8 +104,8 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
       plaid_item_id: plaid_item_id,
       name: plaid_account.name,
       mask: plaid_account.mask,
-      type: normalize_plaid_string(plaid_account.type),
-      subtype: normalize_plaid_string(plaid_account.subtype),
+      type: PlaidStrings.normalize(plaid_account.type),
+      subtype: PlaidStrings.normalize(plaid_account.subtype),
       current_balance: PlaidBalances.balance_to_cents(plaid_account.balances),
       credit_limit: PlaidBalances.balance_limit_to_cents(plaid_account.balances)
     }
@@ -114,10 +114,6 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
     |> Ash.Changeset.for_create(:upsert_from_plaid, attrs, authorize?: false)
     |> Ash.create!(authorize?: false)
   end
-
-  defp normalize_plaid_string(nil), do: nil
-  defp normalize_plaid_string(s) when is_atom(s), do: s |> Atom.to_string() |> String.downcase()
-  defp normalize_plaid_string(s) when is_binary(s), do: String.downcase(s)
 
   defp plaid_client do
     Application.get_env(:finance_smith, :plaid_client, FinanceSmith.Banking.Plaid)

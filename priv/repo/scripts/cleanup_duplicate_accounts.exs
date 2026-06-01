@@ -84,7 +84,9 @@ defmodule FinanceSmith.Scripts.CleanupDuplicateAccounts do
       |> Repo.all()
 
     all_accounts
-    |> Enum.group_by(fn a -> {a.user_id, a.institution, a.mask, a.subtype} end)
+    |> Enum.group_by(fn a ->
+      {a.user_id, a.institution, a.mask, String.downcase(a.subtype || "")}
+    end)
     |> Enum.filter(fn {_, accounts} ->
       length(accounts) > 1 and
         accounts |> Enum.map(& &1.plaid_item_id) |> Enum.uniq() |> length() > 1

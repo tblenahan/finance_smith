@@ -6,12 +6,17 @@ defmodule FinanceSmith.Banking.Account.Changes.DetectDuplicateAccount do
   using the Plaid mask and subtype as the account fingerprint. We preserve the
   new row for Plaid lineage, but mark it as a reporting duplicate so ingestion
   and reads can ignore it.
+
+  A transaction-scoped advisory lock serializes duplicate detection per fingerprint
+  so parallel reconnects cannot both commit as canonical when no prior match exists.
   """
 
   use Ash.Resource.Change
 
-  alias FinanceSmith.Banking.{Account, PlaidItem}
+  alias FinanceSmith.Banking.{Account, PlaidItem, PlaidStrings}
+  alias FinanceSmith.Repo
 
+  require Ash.Expr
   require Ash.Query
 
   @impl true
@@ -25,6 +30,8 @@ defmodule FinanceSmith.Banking.Account.Changes.DetectDuplicateAccount do
            present_value(Ash.Changeset.get_attribute(changeset, :plaid_item_id)),
          {:ok, plaid_account_id} <-
            present_value(Ash.Changeset.get_attribute(changeset, :plaid_account_id)),
+         {:ok, subtype} <-
+           present_normalized_subtype(Ash.Changeset.get_attribute(changeset, :subtype)),
          %PlaidItem{} = plaid_item <- load_plaid_item(plaid_item_id),
          {:ok, institution_name} <- present_string(plaid_item.institution_name),
          %Account{} = canonical <-
@@ -32,7 +39,7 @@ defmodule FinanceSmith.Banking.Account.Changes.DetectDuplicateAccount do
              plaid_item,
              institution_name,
              mask,
-             Ash.Changeset.get_attribute(changeset, :subtype),
+             subtype,
              plaid_account_id
            ) do
       Ash.Changeset.force_change_attribute(changeset, :duplicate_of_id, canonical.id)
@@ -53,6 +60,13 @@ defmodule FinanceSmith.Banking.Account.Changes.DetectDuplicateAccount do
 
   defp present_string(_value), do: :error
 
+  defp present_normalized_subtype(value) do
+    case PlaidStrings.normalize(value) do
+      subtype when is_binary(subtype) and subtype != "" -> {:ok, subtype}
+      _ -> :error
+    end
+  end
+
   defp present_value(nil), do: :error
   defp present_value(value), do: {:ok, value}
 
@@ -68,16 +82,19 @@ defmodule FinanceSmith.Banking.Account.Changes.DetectDuplicateAccount do
          %PlaidItem{id: plaid_item_id, user_id: user_id},
          institution_name,
          mask,
-         subtype,
+         normalized_subtype,
          plaid_account_id
        ) do
+    lock_fingerprint!(user_id, institution_name, mask, normalized_subtype)
+
     Account
     |> Ash.Query.filter(
       plaid_item.user_id == ^user_id and
         plaid_item.institution_name == ^institution_name and
         plaid_item_id != ^plaid_item_id and
         mask == ^mask and
-        subtype == ^subtype and
+        fragment("lower(?) = ?", subtype, ^normalized_subtype) and
+        status == :active and
         is_nil(duplicate_of_id) and
         plaid_account_id != ^plaid_account_id
     )
@@ -85,5 +102,10 @@ defmodule FinanceSmith.Banking.Account.Changes.DetectDuplicateAccount do
     |> Ash.Query.limit(1)
     # SyncWorker context — no actor; cross-item duplicate fingerprint lookup.
     |> Ash.read_one!(authorize?: false)
+  end
+
+  defp lock_fingerprint!(user_id, institution_name, mask, subtype) do
+    lock_key = "#{user_id}:#{institution_name}:#{mask}:#{subtype}"
+    Repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", [lock_key])
   end
 end
