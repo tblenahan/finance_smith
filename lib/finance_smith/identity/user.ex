@@ -217,11 +217,13 @@ defmodule FinanceSmith.Identity.User do
 
     sum :outflow_30d, [:plaid_items, :accounts, :transactions], :amount do
       filter expr(amount > 0 and date >= ago(30, :day))
+      join_filter [:plaid_items, :accounts], expr(is_nil(duplicate_of_id))
       default 0
     end
 
     sum :inflow_30d, [:plaid_items, :accounts, :transactions], :amount do
       filter expr(amount < 0 and date >= ago(30, :day))
+      join_filter [:plaid_items, :accounts], expr(is_nil(duplicate_of_id))
       default 0
     end
 

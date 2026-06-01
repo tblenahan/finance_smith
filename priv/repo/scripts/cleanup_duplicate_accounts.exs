@@ -6,7 +6,7 @@
 # duplicates in the ledger.
 #
 # This script detects duplicate account groups by matching on:
-#   (user_id, institution_name, mask, type)
+#   (user_id, institution_name, mask, subtype)
 # across different Plaid items. For each group the oldest-inserted account is
 # treated as canonical; newer accounts are marked as duplicates.
 #
@@ -83,7 +83,7 @@ defmodule FinanceSmith.Scripts.CleanupDuplicateAccounts do
       |> Repo.all()
 
     all_accounts
-    |> Enum.group_by(fn a -> {a.user_id, a.institution, a.mask, a.type} end)
+    |> Enum.group_by(fn a -> {a.user_id, a.institution, a.mask, a.subtype} end)
     |> Enum.filter(fn {_, accounts} -> length(accounts) > 1 end)
   end
 
@@ -95,7 +95,7 @@ defmodule FinanceSmith.Scripts.CleanupDuplicateAccounts do
 
     IO.puts(
       "\n#{color("Group", :cyan)} #{canonical.institution} ···#{canonical.mask} " <>
-        "(#{canonical.type}) — canonical: #{fmt_id(canonical.account_id)}"
+        "(#{canonical.subtype}) — canonical: #{fmt_id(canonical.account_id)}"
     )
 
     Enum.reduce(duplicates, counters, fn dup, acc ->

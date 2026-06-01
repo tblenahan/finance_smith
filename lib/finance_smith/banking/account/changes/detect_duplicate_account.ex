@@ -58,11 +58,12 @@ defmodule FinanceSmith.Banking.Account.Changes.DetectDuplicateAccount do
     PlaidItem
     |> Ash.Query.filter(id == ^plaid_item_id)
     |> Ash.Query.select([:id, :user_id, :institution_name])
+    # SyncWorker context — no actor; lookup by FK only.
     |> Ash.read_one!(authorize?: false)
   end
 
   defp find_canonical_account(
-         %PlaidItem{user_id: user_id, institution_name: institution_name},
+         %PlaidItem{id: plaid_item_id, user_id: user_id, institution_name: institution_name},
          mask,
          subtype,
          plaid_account_id
@@ -71,6 +72,7 @@ defmodule FinanceSmith.Banking.Account.Changes.DetectDuplicateAccount do
     |> Ash.Query.filter(
       plaid_item.user_id == ^user_id and
         plaid_item.institution_name == ^institution_name and
+        plaid_item_id != ^plaid_item_id and
         mask == ^mask and
         subtype == ^subtype and
         is_nil(duplicate_of_id) and
@@ -78,6 +80,7 @@ defmodule FinanceSmith.Banking.Account.Changes.DetectDuplicateAccount do
     )
     |> Ash.Query.sort(inserted_at: :asc)
     |> Ash.Query.limit(1)
+    # SyncWorker context — no actor; cross-item duplicate fingerprint lookup.
     |> Ash.read_one!(authorize?: false)
   end
 end
