@@ -67,6 +67,7 @@ defmodule FinanceSmith.Scripts.CleanupDuplicateAccounts do
         where: a.status == "active",
         where: is_nil(a.duplicate_of_id),
         where: not is_nil(a.mask),
+        where: not is_nil(pi.institution_name),
         select: %{
           account_id: a.id,
           account_name: a.name,
@@ -84,7 +85,10 @@ defmodule FinanceSmith.Scripts.CleanupDuplicateAccounts do
 
     all_accounts
     |> Enum.group_by(fn a -> {a.user_id, a.institution, a.mask, a.subtype} end)
-    |> Enum.filter(fn {_, accounts} -> length(accounts) > 1 end)
+    |> Enum.filter(fn {_, accounts} ->
+      length(accounts) > 1 and
+        accounts |> Enum.map(& &1.plaid_item_id) |> Enum.uniq() |> length() > 1
+    end)
   end
 
   # ── Per-group processing ───────────────────────────────────────────────────

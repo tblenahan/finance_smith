@@ -36,7 +36,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
     unique: [period: 300, fields: [:args]]
 
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.{PlaidBalances, PlaidItem}
+  alias FinanceSmith.Banking.{Account, PlaidBalances, PlaidItem}
   alias FinanceSmith.DataLake.{ProcessWorker, TransactionProcessor, Uploader}
 
   require Ash.Query
@@ -177,7 +177,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
         # Task.async_stream with bounded concurrency to reduce sequential DB round-trips.
         Enum.each(plaid_accounts, fn plaid_account ->
           case Map.fetch(account_lookup, plaid_account.account_id) do
-            {:ok, account} ->
+            {:ok, %Account{duplicate_of_id: nil} = account} ->
               new_balance = PlaidBalances.balance_to_cents(plaid_account.balances)
               new_limit = PlaidBalances.balance_limit_to_cents(plaid_account.balances)
 
@@ -197,6 +197,11 @@ defmodule FinanceSmith.DataLake.SyncWorker do
                     "[SyncWorker] Balance update failed for account=#{account.id} — skipping. reason=#{inspect(reason)}"
                   )
               end
+
+            {:ok, %Account{id: account_id, duplicate_of_id: _}} ->
+              Logger.debug(
+                "[SyncWorker] Balance refresh skipped for duplicate account=#{account_id} plaid_account_id=#{plaid_account.account_id}"
+              )
 
             :error ->
               Logger.warning(

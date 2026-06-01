@@ -26,9 +26,11 @@ defmodule FinanceSmith.Banking.Account.Changes.DetectDuplicateAccount do
          {:ok, plaid_account_id} <-
            present_value(Ash.Changeset.get_attribute(changeset, :plaid_account_id)),
          %PlaidItem{} = plaid_item <- load_plaid_item(plaid_item_id),
+         {:ok, institution_name} <- present_string(plaid_item.institution_name),
          %Account{} = canonical <-
            find_canonical_account(
              plaid_item,
+             institution_name,
              mask,
              Ash.Changeset.get_attribute(changeset, :subtype),
              plaid_account_id
@@ -63,7 +65,8 @@ defmodule FinanceSmith.Banking.Account.Changes.DetectDuplicateAccount do
   end
 
   defp find_canonical_account(
-         %PlaidItem{id: plaid_item_id, user_id: user_id, institution_name: institution_name},
+         %PlaidItem{id: plaid_item_id, user_id: user_id},
+         institution_name,
          mask,
          subtype,
          plaid_account_id

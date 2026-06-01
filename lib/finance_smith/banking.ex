@@ -21,7 +21,7 @@ defmodule FinanceSmith.Banking do
     end
 
     resource FinanceSmith.Banking.Account do
-      define :get_account_by_id, action: :read, get_by: [:id]
+      define :get_account_by_id, action: :read_for_ui, get_by: [:id]
       define :update_account_balance, action: :update_balance
     end
 

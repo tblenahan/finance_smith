@@ -127,6 +127,32 @@ The `plaid_items.encrypted_access_token` column stores the Plaid `access_token` 
 
 The `users` table stores TOTP MFA state in `encrypted_mfa_secret` and `encrypted_recovery_codes`, encrypted with the same vault.
 
+## One-off maintenance scripts
+
+Scripts under `priv/repo/scripts/` are run with `mix run` against the configured database. **Always dry-run first** and review output before passing `--execute`.
+
+| Script | Purpose |
+|---|---|
+| `cleanup_duplicate_accounts.exs` | Detects Plaid reconnect duplicates (same user, institution, mask, subtype across **different** `plaid_item_id`s), sets `duplicate_of_id` on newer rows, and bulk-deletes their transactions. Idempotent. |
+| `cleanup_duplicates.exs` | Cleans pending/posted transaction orphans from sync edge cases (separate from account deduplication). |
+
+### Recommended order
+
+1. **`cleanup_duplicate_accounts.exs`** (dry run, then `--execute` if groups look correct) — fixes account-level double connections and removes duplicate-account transaction rows.
+2. **`cleanup_duplicates.exs`** (if needed) — pending/posted orphan cleanup after account dedup is stable.
+
+### `cleanup_duplicate_accounts.exs`
+
+```bash
+# Dry run (default) — lists groups and counts only
+mix run priv/repo/scripts/cleanup_duplicate_accounts.exs
+
+# Apply changes
+mix run priv/repo/scripts/cleanup_duplicate_accounts.exs --execute
+```
+
+Discovery skips accounts that already have `duplicate_of_id`, lack a mask, or belong to a Plaid item with a null `institution_name`. Groups must include accounts from more than one Plaid item (same-item collisions are not deduped).
+
 ## Partition Readiness
 
 The `transactions` table is structured for future range partitioning by `date`:
