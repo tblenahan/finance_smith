@@ -344,6 +344,52 @@ defmodule FinanceSmith.DataLake.TransactionProcessorTest do
     end
   end
 
+  describe "process/2 — legacy duplicate-account pending resolution" do
+    test "default :read finds pending on soft-linked account when posted lands on canonical account" do
+      user = register_user!()
+      {plaid_item, canonical_account} = build_plaid_item_with_account(user)
+      duplicate_account = create_duplicate_account!(plaid_item, canonical_account)
+
+      plaid_item =
+        plaid_item
+        |> Ash.load!([:accounts, user: :household], authorize?: false)
+
+      pending_id = "txn-dup-pending-#{System.unique_integer([:positive])}"
+      posted_id = "txn-canonical-posted-#{System.unique_integer([:positive])}"
+
+      create_transaction!(duplicate_account,
+        plaid_transaction_id: pending_id,
+        is_pending: true
+      )
+
+      posted_payload =
+        canonical_account.plaid_account_id
+        |> txn_payload(posted_id, nil)
+        |> Map.merge(%{
+          "amount" => 22.00,
+          "pending_transaction_id" => pending_id
+        })
+
+      payload = %{
+        "added" => [posted_payload],
+        "modified" => [],
+        "removed" => []
+      }
+
+      assert :ok = TransactionProcessor.process(plaid_item, payload)
+
+      assert nil ==
+               Transaction
+               |> Ash.Query.filter(plaid_transaction_id == ^pending_id)
+               |> Ash.read_one!(authorize?: false)
+
+      assert %Transaction{} =
+               Transaction
+               |> Ash.Query.filter(plaid_transaction_id == ^posted_id)
+               |> Ash.read_one!(authorize?: false)
+    end
+  end
+
   describe "process/2 — duplicate account guard" do
     test "skips transactions for soft-linked duplicate accounts" do
       user = register_user!()

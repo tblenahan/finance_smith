@@ -141,6 +141,16 @@ Scripts under `priv/repo/scripts/` are run with `mix run` against the configured
 1. **`cleanup_duplicate_accounts.exs`** (dry run, then `--execute` if groups look correct) — fixes account-level double connections and removes duplicate-account transaction rows.
 2. **`cleanup_duplicates.exs`** (if needed) — pending/posted orphan cleanup after account dedup is stable.
 
+### Deploying duplicate-account handling
+
+1. **Deploy application code** — safe at any time; `TransactionProcessor` uses the default `:read` action (no duplicate-account filter) so legacy pending rows on soft-linked accounts remain visible until cleanup.
+2. **Run `cleanup_duplicate_accounts.exs`** — dry run, then `--execute` when groups look correct. Sets `duplicate_of_id` and removes redundant transactions on duplicate rows.
+3. **Optionally run `cleanup_duplicates.exs`** — pending/posted orphan cleanup after account dedup is stable.
+
+**Why run cleanup:** data hygiene and UI consistency (KPIs and `:list` / `:for_chart` already exclude duplicate-account rows). Cleanup is not required for processor correctness after the scoped transaction read filter.
+
+**Legacy note:** If an environment deployed a build that applied the duplicate-account filter on **all** transaction reads (global preparation) before running account cleanup, run `cleanup_duplicate_accounts.exs --execute` immediately. Until duplicate-account transactions are removed, pending→posted resolution can fail for those rows.
+
 ### `cleanup_duplicate_accounts.exs`
 
 ```bash
