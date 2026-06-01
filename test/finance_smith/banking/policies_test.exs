@@ -7,10 +7,42 @@ defmodule FinanceSmith.Banking.PoliciesTest do
   alias FinanceSmith.Banking.{Account, PlaidItem, Transaction}
   alias FinanceSmith.Identity
 
+  require Ash.Query
+
   defp unique_email, do: "user-#{System.unique_integer([:positive])}@example.com"
 
   defp register_user! do
     Identity.register!(unique_email(), "ValidPassword1!", authorize?: false)
+  end
+
+  defp upsert_plaid_account!(plaid_item, attrs) do
+    unique = System.unique_integer([:positive])
+
+    attrs =
+      Map.merge(
+        %{
+          plaid_account_id: "plaid-account-#{unique}",
+          plaid_item_id: plaid_item.id,
+          name: "Credit Card",
+          mask: "1234",
+          type: "credit",
+          subtype: "credit card"
+        },
+        Map.new(attrs)
+      )
+
+    Account
+    |> Ash.Changeset.for_create(:upsert_from_plaid, attrs, authorize?: false)
+    |> Ash.create!(authorize?: false)
+  end
+
+  defp create_duplicate_account!(plaid_item, canonical_account) do
+    account = create_account!(plaid_item)
+
+    account
+    |> Ash.Changeset.for_update(:update, %{}, authorize?: false)
+    |> Ash.Changeset.force_change_attribute(:duplicate_of_id, canonical_account.id)
+    |> Ash.update!(authorize?: false)
   end
 
   describe "PlaidItem.read policy" do
@@ -113,6 +145,21 @@ defmodule FinanceSmith.Banking.PoliciesTest do
       assert {:error, %Ash.Error.Invalid{errors: [%Ash.Error.Query.NotFound{} | _]}} =
                Banking.get_account_by_id(account.id, actor: stranger)
     end
+
+    test "read_for_ui excludes soft-linked duplicate accounts" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      canonical_account = create_account!(plaid_item)
+      duplicate_account = create_duplicate_account!(plaid_item, canonical_account)
+
+      assert {:ok, %Account{id: id}} =
+               Banking.get_account_by_id(canonical_account.id, actor: user)
+
+      assert id == canonical_account.id
+
+      assert {:error, %Ash.Error.Invalid{errors: [%Ash.Error.Query.NotFound{} | _]}} =
+               Banking.get_account_by_id(duplicate_account.id, actor: user)
+    end
   end
 
   describe "Account write policies" do
@@ -137,6 +184,293 @@ defmodule FinanceSmith.Banking.PoliciesTest do
 
       assert {:error, %Ash.Error.Forbidden{}} =
                account |> Ash.Changeset.for_destroy(:destroy) |> Ash.destroy(actor: user)
+    end
+  end
+
+  describe "Account soft-link duplicate detection" do
+    test "marks same-user accounts with the same institution mask and subtype as duplicates" do
+      user = register_user!()
+      first_item = create_plaid_item!(user, %{institution_name: "Chase"})
+      second_item = create_plaid_item!(user, %{institution_name: "Chase"})
+
+      canonical =
+        upsert_plaid_account!(first_item,
+          plaid_account_id: "canonical-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "credit card"
+        )
+
+      duplicate =
+        upsert_plaid_account!(second_item,
+          plaid_account_id: "duplicate-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "credit card"
+        )
+
+      assert duplicate.duplicate_of_id == canonical.id
+    end
+
+    test "does not soft-link nil mask different subtype or different user accounts" do
+      user = register_user!()
+      other_user = register_user!()
+      first_item = create_plaid_item!(user, %{institution_name: "Chase"})
+      second_item = create_plaid_item!(user, %{institution_name: "Chase"})
+      other_item = create_plaid_item!(other_user, %{institution_name: "Chase"})
+
+      _canonical =
+        upsert_plaid_account!(first_item,
+          plaid_account_id: "canonical-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "credit card"
+        )
+
+      nil_mask =
+        upsert_plaid_account!(second_item,
+          plaid_account_id: "nil-mask-#{System.unique_integer([:positive])}",
+          mask: nil,
+          subtype: "credit card"
+        )
+
+      different_subtype =
+        upsert_plaid_account!(second_item,
+          plaid_account_id: "different-subtype-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "checking"
+        )
+
+      different_user =
+        upsert_plaid_account!(other_item,
+          plaid_account_id: "different-user-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "credit card"
+        )
+
+      assert is_nil(nil_mask.duplicate_of_id)
+      assert is_nil(different_subtype.duplicate_of_id)
+      assert is_nil(different_user.duplicate_of_id)
+    end
+
+    test "does not soft-link when institution names differ" do
+      user = register_user!()
+      chase_item = create_plaid_item!(user, %{institution_name: "Chase"})
+      bofa_item = create_plaid_item!(user, %{institution_name: "Bank of America"})
+
+      _canonical =
+        upsert_plaid_account!(chase_item,
+          plaid_account_id: "canonical-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "credit card"
+        )
+
+      other_institution =
+        upsert_plaid_account!(bofa_item,
+          plaid_account_id: "other-inst-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "credit card"
+        )
+
+      assert is_nil(other_institution.duplicate_of_id)
+    end
+
+    test "does not soft-link when plaid item institution_name is nil" do
+      user = register_user!()
+      named_item = create_plaid_item!(user, %{institution_name: "Chase"})
+      nil_institution_item = create_plaid_item!(user, %{institution_name: nil})
+
+      _canonical =
+        upsert_plaid_account!(named_item,
+          plaid_account_id: "canonical-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "credit card"
+        )
+
+      nil_institution_account =
+        upsert_plaid_account!(nil_institution_item,
+          plaid_account_id: "nil-inst-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "credit card"
+        )
+
+      assert is_nil(nil_institution_account.duplicate_of_id)
+    end
+
+    test "does not soft-link to hidden or quarantined canonical accounts" do
+      user = register_user!()
+      first_item = create_plaid_item!(user, %{institution_name: "Chase"})
+      second_item = create_plaid_item!(user, %{institution_name: "Chase"})
+
+      _hidden_canonical =
+        upsert_plaid_account!(first_item,
+          plaid_account_id: "hidden-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "credit card"
+        )
+        |> Ash.Changeset.for_update(:update, %{}, authorize?: false)
+        |> Ash.Changeset.force_change_attribute(:status, :hidden)
+        |> Ash.update!(authorize?: false)
+
+      reconnect =
+        upsert_plaid_account!(second_item,
+          plaid_account_id: "reconnect-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "credit card"
+        )
+
+      assert is_nil(reconnect.duplicate_of_id)
+    end
+
+    test "soft-links when canonical subtype differs by case" do
+      user = register_user!()
+      first_item = create_plaid_item!(user, %{institution_name: "Chase"})
+      second_item = create_plaid_item!(user, %{institution_name: "Chase"})
+
+      canonical =
+        upsert_plaid_account!(first_item,
+          plaid_account_id: "canonical-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "Credit Card"
+        )
+
+      duplicate =
+        upsert_plaid_account!(second_item,
+          plaid_account_id: "duplicate-#{System.unique_integer([:positive])}",
+          mask: "5189",
+          subtype: "credit card"
+        )
+
+      assert duplicate.duplicate_of_id == canonical.id
+    end
+
+    test "concurrent upserts produce a single canonical account" do
+      user = register_user!()
+      first_item = create_plaid_item!(user, %{institution_name: "Chase"})
+      second_item = create_plaid_item!(user, %{institution_name: "Chase"})
+      parent = self()
+
+      upsert = fn item, suffix ->
+        fn ->
+          Ecto.Adapters.SQL.Sandbox.allow(FinanceSmith.Repo, parent, self())
+
+          upsert_plaid_account!(item,
+            plaid_account_id: "concurrent-#{suffix}-#{System.unique_integer([:positive])}",
+            mask: "7777",
+            subtype: "credit card"
+          )
+        end
+      end
+
+      task1 = Task.async(upsert.(first_item, "a"))
+      task2 = Task.async(upsert.(second_item, "b"))
+
+      account1 = Task.await(task1)
+      account2 = Task.await(task2)
+
+      account1 = Ash.get!(Account, account1.id, authorize?: false)
+      account2 = Ash.get!(Account, account2.id, authorize?: false)
+
+      canonical_count = Enum.count([account1, account2], &is_nil(&1.duplicate_of_id))
+      assert canonical_count == 1
+
+      {canonical, duplicate} =
+        if is_nil(account1.duplicate_of_id) do
+          {account1, account2}
+        else
+          {account2, account1}
+        end
+
+      assert duplicate.duplicate_of_id == canonical.id
+    end
+  end
+
+  describe "duplicate account KPI aggregates" do
+    test "user outflow_30d and inflow_30d exclude soft-linked duplicate account transactions" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      canonical_account = create_account!(plaid_item)
+      duplicate_account = create_duplicate_account!(plaid_item, canonical_account)
+      today = Date.utc_today()
+
+      _canonical_outflow =
+        create_transaction!(canonical_account,
+          plaid_transaction_id: "canonical-out-#{System.unique_integer([:positive])}",
+          amount: 10_000,
+          date: today
+        )
+
+      _duplicate_outflow =
+        create_transaction!(duplicate_account,
+          plaid_transaction_id: "duplicate-out-#{System.unique_integer([:positive])}",
+          amount: 10_000,
+          date: today
+        )
+
+      _canonical_inflow =
+        create_transaction!(canonical_account,
+          plaid_transaction_id: "canonical-in-#{System.unique_integer([:positive])}",
+          amount: -5_000,
+          date: today
+        )
+
+      _duplicate_inflow =
+        create_transaction!(duplicate_account,
+          plaid_transaction_id: "duplicate-in-#{System.unique_integer([:positive])}",
+          amount: -5_000,
+          date: today
+        )
+
+      user_with_kpis =
+        Identity.get_user_with_kpis!(user.id,
+          load: [:outflow_30d, :inflow_30d],
+          actor: user
+        )
+
+      assert user_with_kpis.outflow_30d == 10_000
+      assert user_with_kpis.inflow_30d == -5_000
+    end
+
+    test "plaid item kpi_outflow_30d and kpi_inflow_30d exclude duplicate account transactions" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      canonical_account = create_account!(plaid_item)
+      duplicate_account = create_duplicate_account!(plaid_item, canonical_account)
+      today = Date.utc_today()
+
+      _canonical_outflow =
+        create_transaction!(canonical_account,
+          plaid_transaction_id: "canonical-out-#{System.unique_integer([:positive])}",
+          amount: 8_000,
+          date: today
+        )
+
+      _duplicate_outflow =
+        create_transaction!(duplicate_account,
+          plaid_transaction_id: "duplicate-out-#{System.unique_integer([:positive])}",
+          amount: 8_000,
+          date: today
+        )
+
+      _canonical_inflow =
+        create_transaction!(canonical_account,
+          plaid_transaction_id: "canonical-in-#{System.unique_integer([:positive])}",
+          amount: -3_000,
+          date: today
+        )
+
+      _duplicate_inflow =
+        create_transaction!(duplicate_account,
+          plaid_transaction_id: "duplicate-in-#{System.unique_integer([:positive])}",
+          amount: -3_000,
+          date: today
+        )
+
+      item_with_kpis =
+        Banking.get_plaid_item_kpis!(plaid_item.id,
+          load: [:kpi_outflow_30d, :kpi_inflow_30d],
+          actor: user
+        )
+
+      assert item_with_kpis.kpi_outflow_30d == 8_000
+      assert item_with_kpis.kpi_inflow_30d == -3_000
     end
   end
 
@@ -170,6 +504,35 @@ defmodule FinanceSmith.Banking.PoliciesTest do
                  actor: stranger,
                  page: [limit: 25]
                )
+    end
+
+    test "list action excludes transactions on soft-linked duplicate accounts" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      canonical_account = create_account!(plaid_item)
+      duplicate_account = create_duplicate_account!(plaid_item, canonical_account)
+
+      _canonical_txn =
+        create_transaction!(canonical_account,
+          plaid_transaction_id: "canonical-txn-#{System.unique_integer([:positive])}",
+          date: ~D[2025-06-01]
+        )
+
+      _duplicate_txn =
+        create_transaction!(duplicate_account,
+          plaid_transaction_id: "duplicate-txn-#{System.unique_integer([:positive])}",
+          date: ~D[2025-06-01]
+        )
+
+      assert {:ok, %Ash.Page.Keyset{results: results}} =
+               Banking.list_transactions(
+                 %{date_from: ~D[2025-01-01], date_to: ~D[2025-12-31]},
+                 actor: user,
+                 page: [limit: 25]
+               )
+
+      assert length(results) == 1
+      assert hd(results).account_id == canonical_account.id
     end
   end
 

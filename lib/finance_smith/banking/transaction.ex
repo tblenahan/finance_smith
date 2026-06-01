@@ -1,9 +1,21 @@
 defmodule FinanceSmith.Banking.Transaction do
+  @moduledoc """
+  Ledger transactions.
+
+  User-facing reads (`:list`, `:for_chart`) exclude rows whose account is soft-linked
+  as a Plaid reconnect duplicate (`account.duplicate_of_id` set). The default `:read`
+  action has no duplicate filter so TransactionProcessor and maintenance scripts can
+  resolve legacy pending/posted rows until cleanup runs. System writes use
+  `authorize?: false` and are unaffected.
+  """
+
   use Ash.Resource,
     domain: FinanceSmith.Banking,
     data_layer: AshPostgres.DataLayer,
     notifiers: [Ash.Notifier.PubSub],
     authorizers: [Ash.Policy.Authorizer]
+
+  import Ash.Expr
 
   postgres do
     table "transactions"
@@ -79,6 +91,7 @@ defmodule FinanceSmith.Banking.Transaction do
       filter expr(is_nil(^arg(:date_from)) or date >= ^arg(:date_from))
       filter expr(is_nil(^arg(:plaid_item_id)) or account.plaid_item_id == ^arg(:plaid_item_id))
       filter expr(is_nil(^arg(:user_id)) or account.plaid_item.user_id == ^arg(:user_id))
+      filter expr(is_nil(account.duplicate_of_id))
     end
 
     read :list do
@@ -115,6 +128,8 @@ defmodule FinanceSmith.Banking.Transaction do
                is_nil(^arg(:search)) or
                  fragment("? ILIKE '%' || ? || '%'", merchant_name, ^arg(:search))
              )
+
+      filter expr(is_nil(account.duplicate_of_id))
     end
   end
 

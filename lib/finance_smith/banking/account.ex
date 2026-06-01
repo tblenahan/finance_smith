@@ -22,6 +22,15 @@ defmodule FinanceSmith.Banking.Account do
   actions do
     defaults [:read, :destroy, create: :*, update: :*]
 
+    read :read_for_ui do
+      description """
+      User-facing account read. Excludes soft-linked Plaid reconnect duplicates.
+      System jobs load accounts via the default `:read` (e.g. SyncWorker, TransactionProcessor).
+      """
+
+      filter expr(is_nil(duplicate_of_id))
+    end
+
     create :upsert_from_plaid do
       accept [
         :plaid_account_id,
@@ -40,6 +49,8 @@ defmodule FinanceSmith.Banking.Account do
       # :status is intentionally excluded — manual deactivation is preserved across syncs.
       # Plaid re-syncing an account should not resurrect one the user has deactivated.
       upsert_fields [:name, :mask, :type, :subtype, :current_balance, :credit_limit]
+
+      change FinanceSmith.Banking.Account.Changes.DetectDuplicateAccount
     end
 
     update :update_balance do

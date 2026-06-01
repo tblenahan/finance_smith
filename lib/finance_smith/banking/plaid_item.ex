@@ -163,16 +163,18 @@ defmodule FinanceSmith.Banking.PlaidItem do
 
     sum :kpi_outflow_30d, [:accounts, :transactions], :amount do
       filter expr(amount > 0 and date >= ago(30, :day))
+      join_filter :accounts, expr(is_nil(duplicate_of_id))
       default 0
     end
 
     sum :kpi_inflow_30d, [:accounts, :transactions], :amount do
       filter expr(amount < 0 and date >= ago(30, :day))
+      join_filter :accounts, expr(is_nil(duplicate_of_id))
       default 0
     end
 
     count :kpi_active_accounts_count, :accounts do
-      filter expr(status == :active)
+      filter expr(status == :active and is_nil(duplicate_of_id))
       default 0
     end
   end
