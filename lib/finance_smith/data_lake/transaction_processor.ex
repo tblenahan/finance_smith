@@ -70,6 +70,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     plaid_item = ensure_user_household_loaded!(plaid_item)
     household_id = plaid_item.user.household_id
     account_lookup = build_account_lookup(plaid_item)
+    duplicate_account_ids = duplicate_plaid_account_ids(plaid_item)
     category_lookup = resolve_category_mappings!(payload, household_id)
 
     FinanceSmith.Repo.transaction(fn ->
@@ -80,12 +81,14 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
         |> collect_transaction_notifications(
           payload["added"] || [],
           account_lookup,
+          duplicate_account_ids,
           category_lookup,
           pending_lookup
         )
         |> collect_transaction_notifications(
           payload["modified"] || [],
           account_lookup,
+          duplicate_account_ids,
           category_lookup,
           pending_lookup
         )
@@ -143,7 +146,15 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
   # --- Account lookup -------------------------------------------------------
 
   defp build_account_lookup(%PlaidItem{accounts: accounts}) do
-    Map.new(accounts, fn account -> {account.plaid_account_id, account.id} end)
+    accounts
+    |> Enum.reject(& &1.duplicate_of_id)
+    |> Map.new(fn account -> {account.plaid_account_id, account.id} end)
+  end
+
+  defp duplicate_plaid_account_ids(%PlaidItem{accounts: accounts}) do
+    accounts
+    |> Enum.filter(& &1.duplicate_of_id)
+    |> MapSet.new(& &1.plaid_account_id)
   end
 
   # --- Category mapping resolution ------------------------------------------
@@ -193,6 +204,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
          acc,
          transactions,
          account_lookup,
+         duplicate_account_ids,
          category_lookup,
          pending_lookup
        ) do
@@ -206,9 +218,15 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
           process_transaction(attrs, notifications, resolved_pending_ids, pending_lookup)
 
         :error ->
-          Logger.warning(
-            "[TransactionProcessor] Unknown plaid_account_id=#{plaid_account_id} — skipping transaction #{txn["transaction_id"]}"
-          )
+          if MapSet.member?(duplicate_account_ids, plaid_account_id) do
+            Logger.debug(
+              "[TransactionProcessor] Duplicate plaid_account_id=#{plaid_account_id} — skipping transaction #{txn["transaction_id"]}"
+            )
+          else
+            Logger.warning(
+              "[TransactionProcessor] Unknown plaid_account_id=#{plaid_account_id} — skipping transaction #{txn["transaction_id"]}"
+            )
+          end
 
           acc
       end

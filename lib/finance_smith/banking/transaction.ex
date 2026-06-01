@@ -79,6 +79,7 @@ defmodule FinanceSmith.Banking.Transaction do
       filter expr(is_nil(^arg(:date_from)) or date >= ^arg(:date_from))
       filter expr(is_nil(^arg(:plaid_item_id)) or account.plaid_item_id == ^arg(:plaid_item_id))
       filter expr(is_nil(^arg(:user_id)) or account.plaid_item.user_id == ^arg(:user_id))
+      filter expr(is_nil(account.duplicate_of_id))
     end
 
     read :list do
@@ -104,6 +105,7 @@ defmodule FinanceSmith.Banking.Transaction do
       filter expr(is_nil(^arg(:account_id)) or account_id == ^arg(:account_id))
       filter expr(is_nil(^arg(:plaid_item_id)) or account.plaid_item_id == ^arg(:plaid_item_id))
       filter expr(is_nil(^arg(:user_id)) or account.plaid_item.user_id == ^arg(:user_id))
+      filter expr(is_nil(account.duplicate_of_id))
 
       filter expr(is_nil(^arg(:date_from)) or date >= ^arg(:date_from))
 

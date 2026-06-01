@@ -3,7 +3,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessorTest do
 
   import FinanceSmith.BankingFixtures
 
-  alias FinanceSmith.Banking.{CategoryMapping, MetaCategory, Transaction}
+  alias FinanceSmith.Banking.{Account, CategoryMapping, MetaCategory, Transaction}
   alias FinanceSmith.DataLake.TransactionProcessor
   alias FinanceSmith.Identity
 
@@ -62,6 +62,21 @@ defmodule FinanceSmith.DataLake.TransactionProcessorTest do
     else
       base
     end
+  end
+
+  defp create_duplicate_account!(plaid_item, canonical_account) do
+    unique = System.unique_integer([:positive])
+
+    Account
+    |> Ash.Changeset.for_create(:create, %{
+      plaid_account_id: "dup-acc-#{unique}",
+      name: canonical_account.name,
+      type: canonical_account.type,
+      subtype: canonical_account.subtype,
+      plaid_item_id: plaid_item.id
+    })
+    |> Ash.Changeset.force_change_attribute(:duplicate_of_id, canonical_account.id)
+    |> Ash.create!(authorize?: false)
   end
 
   describe "process/2 — category mapping stamping" do
@@ -326,6 +341,42 @@ defmodule FinanceSmith.DataLake.TransactionProcessorTest do
         |> Ash.read!(authorize?: false)
 
       assert length(remaining) == 1
+    end
+  end
+
+  describe "process/2 — duplicate account guard" do
+    test "skips transactions for soft-linked duplicate accounts" do
+      user = register_user!()
+      {plaid_item, canonical_account} = build_plaid_item_with_account(user)
+      duplicate_account = create_duplicate_account!(plaid_item, canonical_account)
+
+      plaid_item =
+        plaid_item
+        |> Ash.load!([:accounts, user: :household], authorize?: false)
+
+      canonical_txn_id = "txn-canonical-#{System.unique_integer([:positive])}"
+      duplicate_txn_id = "txn-duplicate-#{System.unique_integer([:positive])}"
+
+      payload = %{
+        "added" => [
+          txn_payload(canonical_account.plaid_account_id, canonical_txn_id, nil),
+          txn_payload(duplicate_account.plaid_account_id, duplicate_txn_id, nil)
+        ],
+        "modified" => [],
+        "removed" => []
+      }
+
+      assert :ok = TransactionProcessor.process(plaid_item, payload)
+
+      assert %Transaction{} =
+               Transaction
+               |> Ash.Query.filter(plaid_transaction_id == ^canonical_txn_id)
+               |> Ash.read_one!(authorize?: false)
+
+      assert nil ==
+               Transaction
+               |> Ash.Query.filter(plaid_transaction_id == ^duplicate_txn_id)
+               |> Ash.read_one!(authorize?: false)
     end
   end
 

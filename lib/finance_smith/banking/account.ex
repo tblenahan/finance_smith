@@ -40,6 +40,8 @@ defmodule FinanceSmith.Banking.Account do
       # :status is intentionally excluded — manual deactivation is preserved across syncs.
       # Plaid re-syncing an account should not resurrect one the user has deactivated.
       upsert_fields [:name, :mask, :type, :subtype, :current_balance, :credit_limit]
+
+      change FinanceSmith.Banking.Account.Changes.DetectDuplicateAccount
     end
 
     update :update_balance do

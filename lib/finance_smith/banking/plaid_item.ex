@@ -172,7 +172,7 @@ defmodule FinanceSmith.Banking.PlaidItem do
     end
 
     count :kpi_active_accounts_count, :accounts do
-      filter expr(status == :active)
+      filter expr(status == :active and is_nil(duplicate_of_id))
       default 0
     end
   end
