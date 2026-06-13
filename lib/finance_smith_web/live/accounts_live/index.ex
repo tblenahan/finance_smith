@@ -227,7 +227,7 @@ defmodule FinanceSmithWeb.AccountsLive.Index do
                   class="flex items-center justify-between gap-4 px-5 py-4 hover:bg-gray-900/50 transition-colors group"
                 >
                   <div class="min-w-0">
-                    <p class="text-gray-100 group-hover:text-emerald-400 transition-colors truncate">
+                    <p class="text-gray-100 group-hover:text-gray-300 transition-colors truncate">
                       {account.name}
                       <%= if account.mask do %>
                         <span class="text-gray-500">···{account.mask}</span>

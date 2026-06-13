@@ -71,7 +71,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
   defp sync_all_pages(plaid_item) do
     params = build_sync_params(plaid_item)
 
-    case FinanceSmith.Banking.Plaid.sync_transactions(params) do
+    case plaid_client().sync_transactions(params) do
       {:ok, sync_response} ->
         handle_page(plaid_item, sync_response)
 
@@ -92,8 +92,19 @@ defmodule FinanceSmith.DataLake.SyncWorker do
       sync_all_pages(updated_item)
     else
       Logger.info("[SyncWorker] Sync complete. plaid_item=#{plaid_item.id}")
-      maybe_refresh_realtime_balances(updated_item)
-      complete_sync!(updated_item)
+
+      loaded_item =
+        Ash.load!(updated_item, [:access_token, :accounts, :last_balance_synced_at],
+          authorize?: false
+        )
+
+      # Apply free cached balances synchronously before the optional paid fetch.
+      # ProcessWorker (async B2 path) skips cached writes to avoid overwriting
+      # fresher paid balances when it finishes after sync completion.
+      TransactionProcessor.apply_cached_balances(loaded_item, payload["accounts"] || [])
+
+      maybe_refresh_realtime_balances(loaded_item)
+      complete_sync!(loaded_item)
       :ok
     end
   end
@@ -169,10 +180,8 @@ defmodule FinanceSmith.DataLake.SyncWorker do
   # fetched) or older than 24 hours. A failure logs a warning but does NOT raise
   # so that stale balances never abort a sync run or trigger Oban retries.
   # On success, bumps last_balance_synced_at via :update_balance_timestamp.
-  @balance_refresh_interval_hours 24
-
   defp maybe_refresh_realtime_balances(%PlaidItem{} = plaid_item) do
-    if balance_stale?(plaid_item.last_balance_synced_at) do
+    if BalanceRefresh.stale?(plaid_item.last_balance_synced_at) do
       Logger.info("[SyncWorker] Balance stale — fetching real-time. plaid_item=#{plaid_item.id}")
 
       case BalanceRefresh.run(plaid_item) do
@@ -186,16 +195,9 @@ defmodule FinanceSmith.DataLake.SyncWorker do
       end
     else
       Logger.debug(
-        "[SyncWorker] Balance fresh (< #{@balance_refresh_interval_hours}h) — skipping paid fetch. plaid_item=#{plaid_item.id}"
+        "[SyncWorker] Balance fresh (< #{BalanceRefresh.refresh_interval_hours()}h) — skipping paid fetch. plaid_item=#{plaid_item.id}"
       )
     end
-  end
-
-  defp balance_stale?(nil), do: true
-
-  defp balance_stale?(last_balance_synced_at) do
-    DateTime.diff(DateTime.utc_now(), last_balance_synced_at, :hour) >=
-      @balance_refresh_interval_hours
   end
 
   defp update_balance_timestamp!(plaid_item) do
@@ -213,5 +215,9 @@ defmodule FinanceSmith.DataLake.SyncWorker do
       nil -> raise "[SyncWorker] PlaidItem not found: #{id}"
       item -> item
     end
+  end
+
+  defp plaid_client do
+    Application.get_env(:finance_smith, :plaid_client, FinanceSmith.Banking.Plaid)
   end
 end

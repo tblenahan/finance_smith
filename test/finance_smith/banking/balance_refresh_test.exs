@@ -94,10 +94,19 @@ defmodule FinanceSmith.Banking.BalanceRefreshTest do
       original = create_account!(plaid_item, %{plaid_account_id: "acc_orig"})
 
       duplicate =
-        create_account!(plaid_item, %{
-          plaid_account_id: "acc_dup",
-          duplicate_of_id: original.id
-        })
+        Account
+        |> Ash.Changeset.for_create(
+          :create,
+          %{
+            plaid_account_id: "acc_dup",
+            name: "Dup",
+            type: "depository",
+            subtype: "checking",
+            plaid_item_id: plaid_item.id
+          }
+        )
+        |> Ash.Changeset.force_change_attribute(:duplicate_of_id, original.id)
+        |> Ash.create!(authorize?: false)
 
       item = load_item_with_token_and_accounts!(plaid_item)
       token = item.access_token
@@ -158,6 +167,31 @@ defmodule FinanceSmith.Banking.BalanceRefreshTest do
       end)
 
       assert :ok = BalanceRefresh.run(item)
+    end
+  end
+
+  describe "stale?/1 and fresh?/1" do
+    test "stale?/1 is true for nil and timestamps older than 24 hours" do
+      assert BalanceRefresh.stale?(nil)
+
+      stale_ts = DateTime.add(DateTime.utc_now(), -(25 * 60 * 60), :second)
+      assert BalanceRefresh.stale?(stale_ts)
+    end
+
+    test "stale?/1 is false for timestamps within 24 hours" do
+      fresh_ts = DateTime.add(DateTime.utc_now(), -(1 * 60 * 60), :second)
+      refute BalanceRefresh.stale?(fresh_ts)
+    end
+
+    test "fresh?/1 is false for nil and true for recent timestamps" do
+      refute BalanceRefresh.fresh?(nil)
+
+      fresh_ts = DateTime.add(DateTime.utc_now(), -(1 * 60 * 60), :second)
+      assert BalanceRefresh.fresh?(fresh_ts)
+    end
+
+    test "refresh_interval_hours/0 returns 24" do
+      assert BalanceRefresh.refresh_interval_hours() == 24
     end
   end
 end

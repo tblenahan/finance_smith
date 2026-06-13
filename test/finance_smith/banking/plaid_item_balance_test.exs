@@ -151,8 +151,47 @@ defmodule FinanceSmith.Banking.PlaidItemBalanceTest do
       other = register_user!()
       plaid_item = create_plaid_item!(owner)
 
-      assert {:error, %Ash.Error.Forbidden{}} =
-               Banking.fetch_realtime_balances(plaid_item.id, actor: other)
+      assert_raise Ash.Error.Forbidden, fn ->
+        Banking.fetch_realtime_balances(plaid_item.id, actor: other)
+      end
+    end
+
+    test "is authorized for a same-household member" do
+      owner = register_user!()
+      member = register_user!()
+
+      member =
+        member
+        |> Ash.Changeset.for_update(:update, %{})
+        |> Ash.Changeset.force_change_attribute(:household_id, owner.household_id)
+        |> Ash.update!(authorize?: false)
+
+      plaid_item = create_plaid_item!(owner)
+      _account = create_account!(plaid_item, %{plaid_account_id: "acc_household_test"})
+      token = Ash.load!(plaid_item, :access_token, authorize?: false).access_token
+
+      expect(FinanceSmith.Banking.MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        {:ok,
+         %Plaid.Accounts{
+           accounts: [
+             %Plaid.Accounts.Account{
+               account_id: "acc_household_test",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 500.0,
+                 available: nil,
+                 limit: nil
+               }
+             }
+           ],
+           item: nil,
+           request_id: "req_household"
+         }}
+      end)
+
+      assert {:ok, updated_item} =
+               Banking.fetch_realtime_balances(plaid_item.id, actor: member)
+
+      refute is_nil(updated_item.last_balance_synced_at)
     end
 
     test "does not advance timestamp when Plaid fetch fails" do

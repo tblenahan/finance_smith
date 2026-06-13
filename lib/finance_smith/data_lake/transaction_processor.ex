@@ -47,7 +47,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   alias FinanceSmith.DataLake.{B2, KeyBuilder}
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.{Account, CategoryResolution, PlaidItem, Transaction}
+  alias FinanceSmith.Banking.{Account, CategoryResolution, PlaidBalances, PlaidItem, Transaction}
 
   require Ash.Query
   require Logger
@@ -61,8 +61,10 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   Returns `:ok` or raises on failure.
   """
-  @spec process(PlaidItem.t(), map()) :: :ok
-  def process(%PlaidItem{} = plaid_item, payload) when is_map(payload) do
+  @spec process(PlaidItem.t(), map(), keyword()) :: :ok
+  def process(%PlaidItem{} = plaid_item, payload, opts \\ []) when is_map(payload) do
+    apply_cached_balances? = Keyword.get(opts, :apply_cached_balances?, true)
+
     Logger.info(
       "[TransactionProcessor] Processing. plaid_item=#{plaid_item.id} added=#{length(payload["added"] || [])} modified=#{length(payload["modified"] || [])} removed=#{length(payload["removed"] || [])}"
     )
@@ -100,10 +102,12 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
       {:ok, notifications} when is_list(notifications) ->
         Ash.Notifier.notify(notifications)
 
-        # Apply cached balances from the sync payload after the transaction
-        # commits so that account balance reads are consistent. These are the
-        # free cached values from /transactions/sync — no paid API call.
-        apply_cached_balances(plaid_item, payload["accounts"] || [])
+        if apply_cached_balances? do
+          # Apply cached balances from the sync payload after the transaction
+          # commits so that account balance reads are consistent. These are the
+          # free cached values from /transactions/sync — no paid API call.
+          apply_cached_balances(plaid_item, payload["accounts"] || [])
+        end
 
         Logger.info("[TransactionProcessor] Done. plaid_item=#{plaid_item.id}")
         :ok
@@ -137,7 +141,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     plaid_item_id = extract_plaid_item_id!(object_key)
     plaid_item = load_plaid_item_by_plaid_id!(plaid_item_id)
 
-    process(plaid_item, payload)
+    process(plaid_item, payload, apply_cached_balances?: false)
   end
 
   # --- Household context normalization --------------------------------------
@@ -394,13 +398,10 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   # --- Cached balance application -------------------------------------------
 
-  # Extracts balance data from the `accounts` array in the /transactions/sync
-  # payload and persists it for each matching non-duplicate account.
-  # This is the free cached path — no Plaid API call is made here.
-  # Errors are logged as warnings and never propagate to avoid aborting
-  # an otherwise-successful transaction processing run.
-  defp apply_cached_balances(%PlaidItem{accounts: accounts}, payload_accounts)
-       when is_list(payload_accounts) do
+  @doc false
+  @spec apply_cached_balances(PlaidItem.t(), list()) :: :ok
+  def apply_cached_balances(%PlaidItem{accounts: accounts}, payload_accounts)
+      when is_list(payload_accounts) do
     account_lookup = Map.new(accounts, fn a -> {a.plaid_account_id, a} end)
 
     Enum.each(payload_accounts, fn plaid_account ->
@@ -411,9 +412,9 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
           balances = plaid_account["balances"] || %{}
 
           attrs = %{
-            current_balance: cached_balance_to_cents(balances["current"]),
-            available_balance: cached_balance_to_cents(balances["available"]),
-            credit_limit: cached_balance_to_cents(balances["limit"])
+            current_balance: PlaidBalances.balance_to_cents_from_json(balances),
+            available_balance: PlaidBalances.balance_available_to_cents_from_json(balances),
+            credit_limit: PlaidBalances.balance_limit_to_cents_from_json(balances)
           }
 
           account
@@ -442,13 +443,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     end)
   end
 
-  defp apply_cached_balances(_plaid_item, _payload_accounts), do: :ok
-
-  # Payload balances arrive as float dollars from the JSON-serialized Plaid struct
-  # (string-keyed). Converts to integer cents; nil is a valid return value.
-  defp cached_balance_to_cents(nil), do: nil
-  defp cached_balance_to_cents(value) when is_number(value), do: round(value * 100)
-  defp cached_balance_to_cents(_), do: nil
+  def apply_cached_balances(_plaid_item, _payload_accounts), do: :ok
 
   # --- B2 download helpers (webhook path) -----------------------------------
 

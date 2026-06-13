@@ -4,11 +4,12 @@ defmodule FinanceSmithWeb.AccountLive do
   require Logger
 
   alias FinanceSmith.Banking
+  alias FinanceSmith.Banking.BalanceRefresh
   alias FinanceSmithWeb.MoneyFormat
   alias FinanceSmithWeb.TransactionLiveHelpers
   alias FinanceSmithWeb.TransactionTableComponent
 
-  @balance_fresh_hours 24
+  @balance_fresh_hours BalanceRefresh.refresh_interval_hours()
 
   def mount(%{"account_id" => account_id}, _session, socket) do
     if connected?(socket) do
@@ -64,7 +65,7 @@ defmodule FinanceSmithWeb.AccountLive do
          "We have a... discrepancy. No connection found for this account."
        )}
     else
-      if balance_fresh?(plaid_item.last_balance_synced_at) do
+      if BalanceRefresh.fresh?(plaid_item.last_balance_synced_at) do
         {:noreply, assign(socket, :show_balance_warning, true)}
       else
         {:noreply, perform_balance_refresh(socket)}
@@ -207,23 +208,32 @@ defmodule FinanceSmithWeb.AccountLive do
     user = socket.assigns.current_user
     plaid_item = socket.assigns.plaid_item
 
-    case Banking.fetch_realtime_balances(plaid_item.id, actor: user) do
-      {:ok, _updated_item} ->
-        updated_account = load_account(user, socket.assigns.account_id)
-        updated_plaid_item = load_plaid_item_summary(user, updated_account)
+    socket = assign(socket, :balance_refresh_loading, true)
 
-        socket
-        |> assign(:account, updated_account)
-        |> assign(:plaid_item, updated_plaid_item)
-        |> put_flash(:info, "Sync complete. Inevitable.")
+    result =
+      case Banking.fetch_realtime_balances(plaid_item.id, actor: user) do
+        {:ok, _updated_item} ->
+          updated_account = load_account(user, socket.assigns.account_id)
+          updated_plaid_item = load_plaid_item_summary(user, updated_account)
 
-      {:error, reason} ->
-        Logger.error(
-          "[AccountLive] fetch_realtime_balances failed for plaid_item=#{plaid_item.id}: #{inspect(reason)}"
-        )
+          socket
+          |> assign(:account, updated_account)
+          |> assign(:plaid_item, updated_plaid_item)
+          |> put_flash(:info, "Sync complete. Inevitable.")
 
-        put_flash(socket, :error, "We have a... discrepancy. The real-time balance fetch failed.")
-    end
+        {:error, reason} ->
+          Logger.error(
+            "[AccountLive] fetch_realtime_balances failed for plaid_item=#{plaid_item.id}: #{inspect(reason)}"
+          )
+
+          put_flash(
+            socket,
+            :error,
+            "We have a... discrepancy. The real-time balance fetch failed."
+          )
+      end
+
+    assign(result, :balance_refresh_loading, false)
   end
 
   defp refresh_view(socket) do
@@ -286,12 +296,6 @@ defmodule FinanceSmithWeb.AccountLive do
 
         nil
     end
-  end
-
-  defp balance_fresh?(nil), do: false
-
-  defp balance_fresh?(last_balance_synced_at) do
-    DateTime.diff(DateTime.utc_now(), last_balance_synced_at, :hour) < @balance_fresh_hours
   end
 
   defp account_title(nil), do: "Account"

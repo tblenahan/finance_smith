@@ -31,6 +31,36 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
 
   require Logger
 
+  @refresh_interval_hours 24
+
+  @doc """
+  Returns the configured real-time balance refresh interval in hours.
+  """
+  @spec refresh_interval_hours() :: pos_integer()
+  def refresh_interval_hours, do: @refresh_interval_hours
+
+  @doc """
+  Returns `true` when a paid real-time balance fetch is due (never synced or
+  older than `refresh_interval_hours/0`).
+  """
+  @spec stale?(DateTime.t() | nil) :: boolean()
+  def stale?(nil), do: true
+
+  def stale?(last_balance_synced_at) do
+    DateTime.diff(DateTime.utc_now(), last_balance_synced_at, :hour) >= @refresh_interval_hours
+  end
+
+  @doc """
+  Returns `true` when balances were synced within `refresh_interval_hours/0`.
+  `nil` is treated as not fresh (UI may proceed without a cost warning).
+  """
+  @spec fresh?(DateTime.t() | nil) :: boolean()
+  def fresh?(nil), do: false
+
+  def fresh?(last_balance_synced_at) do
+    DateTime.diff(DateTime.utc_now(), last_balance_synced_at, :hour) < @refresh_interval_hours
+  end
+
   @doc """
   Calls Plaid `/accounts/balance/get` using the `access_token` already loaded
   on `plaid_item`, then persists current/available/limit for each matching
