@@ -101,7 +101,10 @@ defmodule FinanceSmith.DataLake.SyncWorker do
       # Apply free cached balances synchronously before the optional paid fetch.
       # ProcessWorker (async B2 path) skips cached writes to avoid overwriting
       # fresher paid balances when it finishes after sync completion.
-      TransactionProcessor.apply_cached_balances(loaded_item, payload["accounts"] || [])
+      # Skip when a recent paid refresh is authoritative (< 24h).
+      if BalanceRefresh.stale?(loaded_item.last_balance_synced_at) do
+        TransactionProcessor.apply_cached_balances(loaded_item, payload["accounts"] || [])
+      end
 
       maybe_refresh_realtime_balances(loaded_item)
       complete_sync!(loaded_item)

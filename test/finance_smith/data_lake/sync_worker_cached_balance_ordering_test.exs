@@ -13,6 +13,7 @@ defmodule FinanceSmith.DataLake.SyncWorkerCachedBalanceOrderingTest do
   import FinanceSmith.BankingFixtures
 
   alias FinanceSmith.Banking.{Account, BalanceRefresh, MockPlaid, PlaidItem}
+  alias FinanceSmith.Banking.Plaid.SyncTransactionsResponse
   alias FinanceSmith.DataLake.{SyncWorker, TransactionProcessor}
   alias FinanceSmith.Identity
 
@@ -61,7 +62,7 @@ defmodule FinanceSmith.DataLake.SyncWorkerCachedBalanceOrderingTest do
   defp stub_noop_sync(token) do
     stub(MockPlaid, :sync_transactions, fn %{access_token: ^token} ->
       {:ok,
-       %Plaid.Transactions.Sync{
+       %SyncTransactionsResponse{
          added: [],
          modified: [],
          removed: [],
@@ -188,6 +189,101 @@ defmodule FinanceSmith.DataLake.SyncWorkerCachedBalanceOrderingTest do
 
       reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
       refute is_nil(reloaded.last_balance_synced_at)
+    end
+  end
+
+  defp stub_sync_with_accounts(token, plaid_account_id, current) do
+    stub(MockPlaid, :sync_transactions, fn %{access_token: ^token} ->
+      {:ok,
+       %SyncTransactionsResponse{
+         added: [],
+         modified: [],
+         removed: [],
+         next_cursor: "cursor_#{System.unique_integer([:positive])}",
+         has_more: false,
+         accounts: [
+           %Plaid.Accounts.Account{
+             account_id: plaid_account_id,
+             balances: %Plaid.Accounts.Account.Balance{
+               current: current,
+               available: nil,
+               limit: nil
+             }
+           }
+         ]
+       }}
+    end)
+  end
+
+  describe "sync response accounts end-to-end" do
+    test "applies cached balances from sync response accounts when paid fetch fails" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account = create_account!(plaid_item, %{plaid_account_id: "acc_sync_cached"})
+      assert is_nil(plaid_item.last_balance_synced_at)
+
+      token = Ash.load!(plaid_item, :access_token, authorize?: false).access_token
+
+      stub_sync_with_accounts(token, account.plaid_account_id, 1500.0)
+
+      expect(MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        {:error, %Plaid.Error{error_code: "INSTITUTION_DOWN"}}
+      end)
+
+      assert :ok = perform_job(SyncWorker, %{"plaid_item_id" => plaid_item.id})
+
+      updated = Ash.get!(Account, account.id, authorize?: false)
+      assert updated.current_balance == 150_000
+    end
+
+    test "does not apply cached balances when paid refresh is fresh" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account = create_account!(plaid_item, %{plaid_account_id: "acc_fresh_gate_cached"})
+
+      item =
+        plaid_item
+        |> Ash.load!([:access_token, :accounts, user: :household], authorize?: false)
+
+      token = item.access_token
+
+      expect(MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        {:ok,
+         %Plaid.Accounts{
+           accounts: [
+             %Plaid.Accounts.Account{
+               account_id: account.plaid_account_id,
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 2000.0,
+                 available: nil,
+                 limit: nil
+               }
+             }
+           ],
+           item: nil,
+           request_id: "req_fresh_paid"
+         }}
+      end)
+
+      assert :ok = BalanceRefresh.run(item)
+
+      updated = Ash.get!(Account, account.id, authorize?: false)
+      assert updated.current_balance == 200_000
+
+      fresh_ts = DateTime.add(DateTime.utc_now(), -(1 * 60 * 60), :second)
+
+      plaid_item
+      |> Ash.Changeset.for_update(:update, %{}, authorize?: false)
+      |> Ash.Changeset.force_change_attribute(:last_balance_synced_at, fresh_ts)
+      |> Ash.update!(authorize?: false)
+
+      stub_sync_with_accounts(token, account.plaid_account_id, 1000.0)
+      expect(MockPlaid, :get_balance, 0, fn _ -> :not_called end)
+
+      assert :ok = perform_job(SyncWorker, %{"plaid_item_id" => plaid_item.id})
+
+      reloaded = Ash.get!(Account, account.id, authorize?: false)
+      assert reloaded.current_balance == 200_000
     end
   end
 end

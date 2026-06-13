@@ -211,6 +211,49 @@ defmodule FinanceSmith.Banking.PlaidItemBalanceTest do
       assert is_nil(reloaded.last_balance_synced_at)
     end
 
+    test "does not advance timestamp when BalanceRefresh returns partial_update" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account_ok = create_account!(plaid_item, %{plaid_account_id: "acc_action_partial_ok"})
+      account_fail = create_account!(plaid_item, %{plaid_account_id: "acc_action_partial_fail"})
+      assert is_nil(plaid_item.last_balance_synced_at)
+
+      token = Ash.load!(plaid_item, :access_token, authorize?: false).access_token
+
+      expect(FinanceSmith.Banking.MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        Ash.destroy!(account_fail, authorize?: false)
+
+        {:ok,
+         %Plaid.Accounts{
+           accounts: [
+             %Plaid.Accounts.Account{
+               account_id: "acc_action_partial_ok",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 100.0,
+                 available: nil,
+                 limit: nil
+               }
+             },
+             %Plaid.Accounts.Account{
+               account_id: "acc_action_partial_fail",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 200.0,
+                 available: nil,
+                 limit: nil
+               }
+             }
+           ],
+           item: nil,
+           request_id: "req_action_partial"
+         }}
+      end)
+
+      assert {:error, _} = Banking.fetch_realtime_balances(plaid_item.id, actor: user)
+
+      reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
+      assert is_nil(reloaded.last_balance_synced_at)
+    end
+
     test "rejects refresh when balances are fresh and force is false" do
       user = register_user!()
       plaid_item = create_plaid_item!(user)

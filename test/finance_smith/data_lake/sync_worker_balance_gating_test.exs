@@ -12,6 +12,7 @@ defmodule FinanceSmith.DataLake.SyncWorkerBalanceGatingTest do
   import FinanceSmith.BankingFixtures
 
   alias FinanceSmith.Banking.{MockPlaid, PlaidItem}
+  alias FinanceSmith.Banking.Plaid.SyncTransactionsResponse
   alias FinanceSmith.DataLake.SyncWorker
   alias FinanceSmith.Identity
 
@@ -36,7 +37,7 @@ defmodule FinanceSmith.DataLake.SyncWorkerBalanceGatingTest do
   defp stub_noop_sync(token) do
     stub(MockPlaid, :sync_transactions, fn %{access_token: ^token} ->
       {:ok,
-       %Plaid.Transactions.Sync{
+       %SyncTransactionsResponse{
          added: [],
          modified: [],
          removed: [],
@@ -168,6 +169,56 @@ defmodule FinanceSmith.DataLake.SyncWorkerBalanceGatingTest do
 
       reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
       assert is_nil(reloaded.last_balance_synced_at)
+    end
+
+    test "does not advance timestamp when BalanceRefresh returns partial_update" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account_ok = create_account!(plaid_item, %{plaid_account_id: "acc_partial_ok"})
+      account_fail = create_account!(plaid_item, %{plaid_account_id: "acc_partial_fail"})
+      assert is_nil(plaid_item.last_balance_synced_at)
+
+      token = Ash.load!(plaid_item, :access_token, authorize?: false).access_token
+
+      stub_noop_sync(token)
+
+      expect(MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        # Destroy after SyncWorker loaded accounts so BalanceRefresh still attempts
+        # the update and hits a stale-record failure.
+        Ash.destroy!(account_fail, authorize?: false)
+
+        {:ok,
+         %Plaid.Accounts{
+           accounts: [
+             %Plaid.Accounts.Account{
+               account_id: "acc_partial_ok",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 100.0,
+                 available: nil,
+                 limit: nil
+               }
+             },
+             %Plaid.Accounts.Account{
+               account_id: "acc_partial_fail",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 200.0,
+                 available: nil,
+                 limit: nil
+               }
+             }
+           ],
+           item: nil,
+           request_id: "req_partial"
+         }}
+      end)
+
+      assert :ok = perform_job(SyncWorker, %{"plaid_item_id" => plaid_item.id})
+
+      reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
+      assert is_nil(reloaded.last_balance_synced_at)
+
+      updated_ok = Ash.get!(FinanceSmith.Banking.Account, account_ok.id, authorize?: false)
+      assert updated_ok.current_balance == 10_000
     end
   end
 end

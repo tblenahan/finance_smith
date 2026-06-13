@@ -1,11 +1,12 @@
 defmodule FinanceSmith.DataLake.UploaderTest do
   use ExUnit.Case, async: true
 
+  alias FinanceSmith.Banking.Plaid.SyncTransactionsResponse
   alias FinanceSmith.DataLake.Uploader
 
   describe "to_sync_payload/1" do
     test "converts a struct to a string-keyed map" do
-      input = %Plaid.Transactions.Sync{
+      input = %SyncTransactionsResponse{
         added: [],
         modified: [],
         removed: [],
@@ -66,8 +67,34 @@ defmodule FinanceSmith.DataLake.UploaderTest do
       assert result["items"] == [1, "two", "three", nil, true]
     end
 
+    test "includes accounts when present on sync response" do
+      input = %SyncTransactionsResponse{
+        added: [],
+        modified: [],
+        removed: [],
+        next_cursor: "cursor_abc",
+        has_more: false,
+        request_id: "req_123",
+        accounts: [
+          %Plaid.Accounts.Account{
+            account_id: "acc_123",
+            balances: %Plaid.Accounts.Account.Balance{
+              current: 1500.0,
+              available: nil,
+              limit: nil
+            }
+          }
+        ]
+      }
+
+      result = Uploader.to_sync_payload(input)
+
+      assert [%{"account_id" => "acc_123", "balances" => balances}] = result["accounts"]
+      assert balances["current"] == 1500.0
+    end
+
     test "output is JSON-encodable" do
-      input = %Plaid.Transactions.Sync{
+      input = %SyncTransactionsResponse{
         added: [],
         modified: [],
         removed: [],

@@ -305,7 +305,7 @@ defmodule FinanceSmith.Banking.PlaidTest do
     } do
       assert {:ok, result} = PlaidService.sync_transactions(%{access_token: access_token})
 
-      assert %Plaid.Transactions.Sync{} = result
+      assert %FinanceSmith.Banking.Plaid.SyncTransactionsResponse{} = result
       assert is_binary(result.next_cursor)
       assert is_boolean(result.has_more)
       assert is_list(result.added)
