@@ -24,6 +24,7 @@ defmodule FinanceSmithWeb.OAuthCallbackLive do
   use FinanceSmithWeb, :live_view
 
   alias FinanceSmith.Banking
+  alias FinanceSmith.Banking.PlaidErrorLog
 
   require Logger
 
@@ -37,7 +38,9 @@ defmodule FinanceSmithWeb.OAuthCallbackLive do
        |> put_flash(:error, "We have a... discrepancy. OAuth state is missing.")
        |> push_navigate(to: ~p"/dashboard")}
     else
-      case create_link_token(socket.assigns.current_user) do
+      user = socket.assigns.current_user
+
+      case create_link_token(user) do
         {:ok, link_token} ->
           received_redirect_uri = build_redirect_uri(oauth_state_id)
 
@@ -82,8 +85,11 @@ defmodule FinanceSmithWeb.OAuthCallbackLive do
          |> push_navigate(to: ~p"/dashboard")}
 
       {:error, error} ->
-        Logger.error(
-          "[OAuthCallbackLive] PlaidItem creation failed for user=#{user.id}: #{inspect(error)}"
+        Logger.error("[OAuthCallbackLive] PlaidItem creation failed",
+          user_id: user.id,
+          household_id: user.household_id,
+          flow: :oauth_callback,
+          plaid_error: PlaidErrorLog.from_reason(error)
         )
 
         {:noreply,
@@ -103,15 +109,35 @@ defmodule FinanceSmithWeb.OAuthCallbackLive do
      |> put_flash(:error, "We have a... discrepancy. Incomplete handshake data received.")}
   end
 
-  def handle_event("plaid_link_error", %{"error_code" => error_code}, socket) do
-    Logger.warning("[OAuthCallbackLive] Plaid Link exited with error_code=#{error_code}")
+  def handle_event("plaid_link_error", %{"error_code" => _error_code} = params, socket) do
+    user = socket.assigns.current_user
+
+    Logger.warning("[OAuthCallbackLive] Plaid Link exited",
+      user_id: user.id,
+      household_id: user.household_id,
+      flow: :oauth_callback,
+      oauth_state_id_present?:
+        String.contains?(socket.assigns.received_redirect_uri, "oauth_state_id="),
+      plaid_error: PlaidErrorLog.from_link_exit(params)
+    )
 
     {:noreply,
      socket
      |> assign(:state, :error)}
   end
 
-  def handle_event("plaid_link_error", _params, socket) do
+  def handle_event("plaid_link_error", params, socket) do
+    user = socket.assigns.current_user
+
+    Logger.warning("[OAuthCallbackLive] Plaid Link exited without error_code",
+      user_id: user.id,
+      household_id: user.household_id,
+      flow: :oauth_callback,
+      oauth_state_id_present?:
+        String.contains?(socket.assigns.received_redirect_uri, "oauth_state_id="),
+      plaid_error: if(is_map(params), do: PlaidErrorLog.from_link_exit(params), else: %{})
+    )
+
     {:noreply, assign(socket, :state, :error)}
   end
 
@@ -152,6 +178,9 @@ defmodule FinanceSmithWeb.OAuthCallbackLive do
   defp create_link_token(user) do
     redirect_uri = build_redirect_uri(nil)
 
+    plaid_env =
+      if Application.get_env(:plaid, :root_uri) =~ "sandbox", do: "sandbox", else: "production"
+
     params = %{
       client_name: "Finance Smith",
       language: "en",
@@ -162,8 +191,20 @@ defmodule FinanceSmithWeb.OAuthCallbackLive do
     }
 
     case plaid_client().create_link_token(params) do
-      {:ok, %{link_token: link_token}} -> {:ok, link_token}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{link_token: link_token}} ->
+        {:ok, link_token}
+
+      {:error, reason} ->
+        Logger.error("[OAuthCallbackLive] create_link_token failed",
+          flow: :oauth_callback,
+          user_id: user.id,
+          household_id: user.household_id,
+          plaid_env: plaid_env,
+          redirect_uri: redirect_uri,
+          plaid_error: PlaidErrorLog.from_reason(reason)
+        )
+
+        {:error, reason}
     end
   end
 

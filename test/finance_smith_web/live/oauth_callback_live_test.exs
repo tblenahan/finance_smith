@@ -98,7 +98,7 @@ defmodule FinanceSmithWeb.OAuthCallbackLiveTest do
       end)
 
       {:ok, view, _html} = conn |> log_in_user(user) |> live_oauth()
-      %{view: view}
+      %{view: view, user: user}
     end
 
     test "renders error UI when error_code is present", %{view: view} do
@@ -106,11 +106,35 @@ defmodule FinanceSmithWeb.OAuthCallbackLiveTest do
         render_hook(view, "plaid_link_error", %{
           "error_type" => "OAUTH",
           "error_code" => "OAUTH_ERROR",
-          "display_message" => "failed"
+          "error_message" => "oauth handshake failed",
+          "display_message" => "failed",
+          "request_id" => "req_oauth_123",
+          "institution_id" => "ins_123",
+          "institution_name" => "American Express",
+          "link_session_id" => "session_123",
+          "link_status" => "requires_credentials"
         })
 
       assert html =~ "We have a... discrepancy."
       assert html =~ "Return to The Ledger"
+    end
+
+    test "logs structured metadata on plaid_link_error", %{view: view, user: user} do
+      import ExUnit.CaptureLog
+
+      log =
+        capture_log(fn ->
+          render_hook(view, "plaid_link_error", %{
+            "error_type" => "INSTITUTION_ERROR",
+            "error_code" => "INSTITUTION_REGISTRATION_REQUIRED",
+            "request_id" => "req_oauth_log",
+            "institution_name" => "American Express"
+          })
+        end)
+
+      assert log =~ "[OAuthCallbackLive] Plaid Link exited"
+      assert log =~ user.id
+      assert log =~ "INSTITUTION_REGISTRATION_REQUIRED"
     end
 
     test "renders error UI when params are empty", %{view: view} do

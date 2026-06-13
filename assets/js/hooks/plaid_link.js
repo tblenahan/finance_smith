@@ -13,7 +13,7 @@
  *
  * Events pushed to the LiveView:
  *   "plaid_link_success" — %{public_token, institution_name}
- *   "plaid_link_error"   — %{error_type, error_code, display_message}
+ *   "plaid_link_error"   — enriched, token-safe Plaid diagnostics
  */
 const PlaidLink = {
   mounted() {
@@ -53,12 +53,20 @@ const PlaidLink = {
           institution_name: metadata?.institution?.name ?? "",
         });
       },
-      onExit: (err, _metadata) => {
+      onExit: (err, metadata) => {
         if (err) {
+          const institution = metadata?.institution ?? {};
+
           this.pushEvent("plaid_link_error", {
             error_type: err.error_type ?? "UNKNOWN",
             error_code: err.error_code ?? "UNKNOWN",
+            error_message: err.error_message ?? "",
             display_message: err.display_message ?? "",
+            request_id: err.request_id ?? "",
+            link_status: metadata?.status ?? "",
+            institution_id: institution.institution_id ?? "",
+            institution_name: institution.name ?? "",
+            link_session_id: metadata?.link_session_id ?? "",
           });
         }
       },

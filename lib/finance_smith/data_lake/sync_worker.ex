@@ -36,7 +36,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
     unique: [period: 300, fields: [:args]]
 
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.{Account, PlaidBalances, PlaidItem}
+  alias FinanceSmith.Banking.{Account, PlaidBalances, PlaidErrorLog, PlaidItem}
   alias FinanceSmith.DataLake.{ProcessWorker, TransactionProcessor, Uploader}
 
   require Ash.Query
@@ -133,8 +133,12 @@ defmodule FinanceSmith.DataLake.SyncWorker do
   # --- Error handling -------------------------------------------------------
 
   defp handle_plaid_error(plaid_item, reason) do
-    Logger.error(
-      "[SyncWorker] Plaid API error. plaid_item=#{plaid_item.id} reason=#{inspect(reason)}"
+    plaid_error = PlaidErrorLog.from_reason(reason)
+
+    Logger.error("[SyncWorker] Plaid API error",
+      operation: :transactions_sync,
+      plaid_item_id: plaid_item.id,
+      plaid_error: plaid_error
     )
 
     plaid_item
@@ -142,7 +146,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
     |> Ash.update!(authorize?: false)
 
     # Discard prevents Oban from retrying — the item needs re-authentication
-    {:discard, "Plaid error: #{inspect(reason)}"}
+    {:discard, "Plaid error: #{inspect(plaid_error)}"}
   end
 
   # --- Helpers --------------------------------------------------------------

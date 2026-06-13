@@ -2,6 +2,7 @@ defmodule FinanceSmithWeb.DashboardLive do
   use FinanceSmithWeb, :live_view
 
   alias FinanceSmith.Banking
+  alias FinanceSmith.Banking.PlaidErrorLog
   alias FinanceSmith.DataLake.SyncWorker
   alias FinanceSmith.Identity
   alias FinanceSmithWeb.MoneyFormat
@@ -70,9 +71,7 @@ defmodule FinanceSmithWeb.DashboardLive do
       {:ok, link_token} ->
         {:noreply, push_event(socket, "open_plaid_link", %{link_token: link_token})}
 
-      {:error, reason} ->
-        Logger.error("[DashboardLive] create_link_token failed: #{inspect(reason)}")
-
+      {:error, _reason} ->
         {:noreply,
          put_flash(socket, :error, "We have a... discrepancy. Could not reach the data broker.")}
     end
@@ -102,8 +101,11 @@ defmodule FinanceSmithWeb.DashboardLive do
          |> push_navigate(to: ~p"/dashboard")}
 
       {:error, error} ->
-        Logger.error(
-          "[DashboardLive] PlaidItem creation failed for user=#{user.id}: #{inspect(error)}"
+        Logger.error("[DashboardLive] PlaidItem creation failed",
+          user_id: user.id,
+          household_id: user.household_id,
+          flow: :dashboard_link,
+          plaid_error: PlaidErrorLog.from_reason(error)
         )
 
         {:noreply,
@@ -120,12 +122,32 @@ defmodule FinanceSmithWeb.DashboardLive do
      put_flash(socket, :error, "We have a... discrepancy. Incomplete handshake data received.")}
   end
 
-  def handle_event("plaid_link_error", %{"error_code" => error_code}, socket) do
-    Logger.warning("[DashboardLive] Plaid Link exited with error_code=#{error_code}")
+  def handle_event("plaid_link_error", %{"error_code" => _error_code} = params, socket) do
+    user = socket.assigns.current_user
+    plaid_error = PlaidErrorLog.from_link_exit(params)
+
+    Logger.warning("[DashboardLive] Plaid Link exited",
+      user_id: user.id,
+      household_id: user.household_id,
+      flow: :dashboard_link,
+      scope: socket.assigns.scope,
+      plaid_error: plaid_error
+    )
+
     {:noreply, put_flash(socket, :error, "We have a... discrepancy. The link was not completed.")}
   end
 
-  def handle_event("plaid_link_error", _params, socket) do
+  def handle_event("plaid_link_error", params, socket) do
+    user = socket.assigns.current_user
+
+    Logger.warning("[DashboardLive] Plaid Link exited without error_code",
+      user_id: user.id,
+      household_id: user.household_id,
+      flow: :dashboard_link,
+      scope: socket.assigns.scope,
+      plaid_error: if(is_map(params), do: PlaidErrorLog.from_link_exit(params), else: %{})
+    )
+
     {:noreply, socket}
   end
 
@@ -384,8 +406,20 @@ defmodule FinanceSmithWeb.DashboardLive do
     }
 
     case plaid_client().create_link_token(params) do
-      {:ok, %{link_token: link_token}} -> {:ok, link_token}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{link_token: link_token}} ->
+        {:ok, link_token}
+
+      {:error, reason} ->
+        Logger.error("[DashboardLive] create_link_token failed",
+          flow: :dashboard_link,
+          user_id: user.id,
+          household_id: user.household_id,
+          plaid_env: plaid_env,
+          redirect_uri: redirect_uri,
+          plaid_error: PlaidErrorLog.from_reason(reason)
+        )
+
+        {:error, reason}
     end
   end
 

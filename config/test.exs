@@ -30,6 +30,21 @@ config :ash, policies: [show_policy_breakdowns?: true], disable_async?: true
 
 config :finance_smith, :enable_logger_file_backend, false
 
+config :logger, :console,
+  format: "[$level] $message $metadata\n",
+  metadata: [
+    :user_id,
+    :household_id,
+    :flow,
+    :scope,
+    :plaid_error,
+    :oauth_state_id_present?,
+    :plaid_env,
+    :redirect_uri,
+    :operation,
+    :plaid_item_id
+  ]
+
 # Manual mode: jobs are persisted but not executed automatically. This avoids
 # SyncWorker firing (real Plaid + B2) when LiveViews enqueue jobs from a process
 # that does not inherit the test process's Oban.Testing.with_testing_mode/2 flag.

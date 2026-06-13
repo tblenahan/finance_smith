@@ -15,7 +15,7 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
   use Ash.Resource.Change
 
   alias AshCloak
-  alias FinanceSmith.Banking.{Account, PlaidBalances, PlaidItem, PlaidStrings}
+  alias FinanceSmith.Banking.{Account, PlaidBalances, PlaidErrorLog, PlaidItem, PlaidStrings}
   alias FinanceSmith.DataLake.SyncWorker
 
   require Ash.Query
@@ -34,7 +34,10 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
           |> Ash.Changeset.force_change_attribute(:plaid_item_id, item_id)
 
         {:error, reason} ->
-          Logger.error("[ExchangePublicToken] Plaid token exchange failed: #{inspect(reason)}")
+          Logger.error("[ExchangePublicToken] Plaid token exchange failed",
+            operation: :exchange_public_token,
+            plaid_error: PlaidErrorLog.from_reason(reason)
+          )
 
           Ash.Changeset.add_error(
             changeset,
@@ -50,7 +53,11 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
 
       case plaid_client().get_accounts(%{access_token: item_with_token.access_token}) do
         {:error, reason} ->
-          Logger.error("[ExchangePublicToken] Plaid accounts/get failed: #{inspect(reason)}")
+          Logger.error("[ExchangePublicToken] Plaid accounts/get failed",
+            operation: :accounts_get,
+            plaid_item_id: plaid_item.id,
+            plaid_error: PlaidErrorLog.from_reason(reason)
+          )
 
           {:error,
            Ash.Error.Changes.InvalidArgument.exception(
@@ -82,7 +89,10 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
 
             {:error, reason} ->
               Logger.warning(
-                "[ExchangePublicToken] SyncWorker enqueue failed for plaid_item=#{plaid_item.id}: #{inspect(reason)}"
+                "[ExchangePublicToken] SyncWorker enqueue failed",
+                operation: :sync_enqueue,
+                plaid_item_id: plaid_item.id,
+                plaid_error: PlaidErrorLog.from_reason(reason)
               )
           end
 

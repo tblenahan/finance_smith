@@ -341,7 +341,7 @@ defmodule FinanceSmithWeb.DashboardLiveTest do
     setup %{conn: conn} do
       user = register_user!()
       {:ok, view, _html} = conn |> log_in_user(user) |> live_dashboard()
-      %{view: view}
+      %{view: view, user: user}
     end
 
     test "shows error flash when error_code is present", %{view: view} do
@@ -349,10 +349,34 @@ defmodule FinanceSmithWeb.DashboardLiveTest do
         render_hook(view, "plaid_link_error", %{
           "error_type" => "OAUTH",
           "error_code" => "OAUTH_ERROR",
-          "display_message" => "failed"
+          "error_message" => "oauth handshake failed",
+          "display_message" => "failed",
+          "request_id" => "req_dashboard_123",
+          "institution_id" => "ins_123",
+          "institution_name" => "American Express",
+          "link_session_id" => "session_123",
+          "link_status" => "requires_credentials"
         })
 
       assert html =~ "The link was not completed"
+    end
+
+    test "logs structured metadata on plaid_link_error", %{view: view, user: user} do
+      import ExUnit.CaptureLog
+
+      log =
+        capture_log(fn ->
+          render_hook(view, "plaid_link_error", %{
+            "error_type" => "INSTITUTION_ERROR",
+            "error_code" => "INSTITUTION_REGISTRATION_REQUIRED",
+            "request_id" => "req_dashboard_log",
+            "institution_name" => "American Express"
+          })
+        end)
+
+      assert log =~ "[DashboardLive] Plaid Link exited"
+      assert log =~ user.id
+      assert log =~ "INSTITUTION_REGISTRATION_REQUIRED"
     end
   end
 
