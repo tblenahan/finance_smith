@@ -47,7 +47,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   alias FinanceSmith.DataLake.{B2, KeyBuilder}
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.{CategoryResolution, PlaidItem, Transaction}
+  alias FinanceSmith.Banking.{Account, CategoryResolution, PlaidItem, Transaction}
 
   require Ash.Query
   require Logger
@@ -99,6 +99,11 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     |> case do
       {:ok, notifications} when is_list(notifications) ->
         Ash.Notifier.notify(notifications)
+
+        # Apply cached balances from the sync payload after the transaction
+        # commits so that account balance reads are consistent. These are the
+        # free cached values from /transactions/sync — no paid API call.
+        apply_cached_balances(plaid_item, payload["accounts"] || [])
 
         Logger.info("[TransactionProcessor] Done. plaid_item=#{plaid_item.id}")
         :ok
@@ -386,6 +391,64 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
   defp dollars_to_cents(amount) when is_number(amount) do
     round(amount * 100)
   end
+
+  # --- Cached balance application -------------------------------------------
+
+  # Extracts balance data from the `accounts` array in the /transactions/sync
+  # payload and persists it for each matching non-duplicate account.
+  # This is the free cached path — no Plaid API call is made here.
+  # Errors are logged as warnings and never propagate to avoid aborting
+  # an otherwise-successful transaction processing run.
+  defp apply_cached_balances(%PlaidItem{accounts: accounts}, payload_accounts)
+       when is_list(payload_accounts) do
+    account_lookup = Map.new(accounts, fn a -> {a.plaid_account_id, a} end)
+
+    Enum.each(payload_accounts, fn plaid_account ->
+      plaid_account_id = plaid_account["account_id"]
+
+      case Map.fetch(account_lookup, plaid_account_id) do
+        {:ok, %Account{duplicate_of_id: nil} = account} ->
+          balances = plaid_account["balances"] || %{}
+
+          attrs = %{
+            current_balance: cached_balance_to_cents(balances["current"]),
+            available_balance: cached_balance_to_cents(balances["available"]),
+            credit_limit: cached_balance_to_cents(balances["limit"])
+          }
+
+          account
+          |> Ash.Changeset.for_update(:update_cached_balances, attrs, authorize?: false)
+          |> Ash.update(authorize?: false)
+          |> case do
+            {:ok, _updated} ->
+              :ok
+
+            {:error, reason} ->
+              Logger.warning(
+                "[TransactionProcessor] Cached balance update failed for account=#{account.id} — skipping. reason=#{inspect(reason)}"
+              )
+          end
+
+        {:ok, %Account{id: account_id, duplicate_of_id: _}} ->
+          Logger.debug(
+            "[TransactionProcessor] Cached balance skipped for duplicate account=#{account_id} plaid_account_id=#{plaid_account_id}"
+          )
+
+        :error ->
+          Logger.debug(
+            "[TransactionProcessor] Cached balance: unknown plaid_account_id=#{plaid_account_id} — skipping"
+          )
+      end
+    end)
+  end
+
+  defp apply_cached_balances(_plaid_item, _payload_accounts), do: :ok
+
+  # Payload balances arrive as float dollars from the JSON-serialized Plaid struct
+  # (string-keyed). Converts to integer cents; nil is a valid return value.
+  defp cached_balance_to_cents(nil), do: nil
+  defp cached_balance_to_cents(value) when is_number(value), do: round(value * 100)
+  defp cached_balance_to_cents(_), do: nil
 
   # --- B2 download helpers (webhook path) -----------------------------------
 

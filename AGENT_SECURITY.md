@@ -31,9 +31,10 @@ When you implement a `[PLANNED]` control from that document, update **both** `SE
 ## Agent rules: encryption and sensitive data
 
 - **NEVER** remove or bypass the `cloak` block on `FinanceSmith.Banking.PlaidItem`. The `access_token` attribute must stay inside `cloak do ... end`.
-- **NEVER** load `plaid_item.access_token` for bulk UI or broad `Ash.read!` lists. Load and use it only in the two code paths that perform Plaid API calls:
-  1. **Sync pipeline** — `FinanceSmith.DataLake.SyncWorker` and its helpers.
+- **NEVER** load `plaid_item.access_token` for bulk UI or broad `Ash.read!` lists. Load and use it only in the three code paths that perform Plaid API calls:
+  1. **Sync pipeline** — `FinanceSmith.DataLake.SyncWorker` and its helper `FinanceSmith.Banking.BalanceRefresh`. `BalanceRefresh.run/1` receives an already-loaded struct; it never performs its own `access_token` read.
   2. **Item creation** — `FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken`, which loads the token immediately after the `PlaidItem` is persisted in order to call Plaid `accounts/get` and seed `Account` rows. This single-record load inside an `after_action` hook is intentional and acceptable.
+  3. **Actor-authorized balance refresh** — `FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances`, invoked by the `:fetch_realtime_balances` action. The `authorize?: false` scope is **strictly limited** to a single `Ash.read_one!/2` that loads only `:access_token` and `:accounts` for the network request inside `before_action`. It never escapes into the UI read layer, and the calling LiveView (`AccountLive`) receives no token-bearing struct in response.
 - **Prefer UI-safe code interfaces:** For LiveViews and any non-system read path, use `FinanceSmith.Banking.get_plaid_item_summary_by_id/1` (action `:read_for_ui`) or `list_active_plaid_items/0` (action `:list_active`), both of which exclude `access_token`. The interface `get_plaid_item_by_id/1` uses the primary `:read` action and can decrypt the token — only use it in system/test contexts.
 - **NEVER** change the vault cipher away from AES-GCM without a documented key rotation and migration plan.
 - **NEVER** mark `access_token` as `sensitive?: false` or expose it in HTTP responses or logs.
@@ -79,7 +80,9 @@ When you implement a `[PLANNED]` control from that document, update **both** `SE
 | Prod secret enforcement + `PLAID_ENV` branching | [`config/runtime.exs`](config/runtime.exs) |
 | Dev/test env + optional B2 | [`config/dev.exs`](config/dev.exs), [`config/test.exs`](config/test.exs) |
 | Transaction sync + token use | [`lib/finance_smith/data_lake/sync_worker.ex`](lib/finance_smith/data_lake/sync_worker.ex) |
+| Real-time balance refresh (shared) | [`lib/finance_smith/banking/balance_refresh.ex`](lib/finance_smith/banking/balance_refresh.ex) |
 | Item creation + accounts bootstrap (token use) | [`lib/finance_smith/banking/plaid_item/changes/exchange_public_token.ex`](lib/finance_smith/banking/plaid_item/changes/exchange_public_token.ex) |
+| Actor-authorized UI balance refresh (token use) | [`lib/finance_smith/banking/plaid_item/changes/fetch_realtime_balances.ex`](lib/finance_smith/banking/plaid_item/changes/fetch_realtime_balances.ex) |
 | B2 upload (SHA-1 header) | [`lib/finance_smith/data_lake/b2.ex`](lib/finance_smith/data_lake/b2.ex) |
 | B2 auth token process | [`lib/finance_smith/data_lake/b2/auth_server.ex`](lib/finance_smith/data_lake/b2/auth_server.ex) |
 
@@ -92,7 +95,7 @@ When you implement a `[PLANNED]` control from that document, update **both** `SE
 3. Always add new required secrets to `config/runtime.exs` (with startup `raise`) and `.env.example` (placeholder), and extend the table in `SECURITY.md`.
 4. Never commit `.env`. Confirm `.gitignore` before staging secrets-adjacent files.
 5. Never remove, bypass, or weaken AshCloak encryption on `PlaidItem.access_token`.
-6. Never load `access_token` in bulk reads for UI. Acceptable load sites: (a) `SyncWorker` and its helpers for ongoing sync, and (b) `ExchangePublicToken` immediately after item creation to call Plaid `accounts/get`.
+6. Never load `access_token` in bulk reads for UI. Acceptable load sites: (a) `SyncWorker` (struct passed to `BalanceRefresh`) for ongoing sync, (b) `ExchangePublicToken` immediately after item creation to call Plaid `accounts/get`, and (c) `FetchRealtimeBalances` — a tightly scoped single-record load inside `before_action` for the actor-authorized UI balance refresh. All three sites are documented; any new site requires explicit review.
 7. When adding new secrets managed by the app, use AshCloak + Vault like existing tokens.
 8. Do not add `authorize?: false` to **new** user-facing production paths without review. Workers and session/bootstrap code may continue to use it where already established.
 9. When adding or changing Ash policies, avoid a blanket `authorize_if always()` on sensitive actions without an explicit constraint (documented bypasses for unauthenticated actions such as `:register` / `:sign_in` are acceptable).

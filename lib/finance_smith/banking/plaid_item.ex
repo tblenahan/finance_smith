@@ -48,6 +48,7 @@ defmodule FinanceSmith.Banking.PlaidItem do
                   :institution_name,
                   :status,
                   :last_synced_at,
+                  :last_balance_synced_at,
                   :user_id,
                   :inserted_at,
                   :updated_at
@@ -69,6 +70,27 @@ defmodule FinanceSmith.Banking.PlaidItem do
       accept []
       change set_attribute(:last_synced_at, &DateTime.utc_now/0)
     end
+
+    # System-only. Called by SyncWorker (after a real-time Plaid balance fetch)
+    # with authorize?: false. The :fetch_realtime_balances change sets the
+    # timestamp directly via force_change_attribute, so this action is only
+    # called from the background worker path.
+    update :update_balance_timestamp do
+      accept []
+      change set_attribute(:last_balance_synced_at, &DateTime.utc_now/0)
+    end
+
+    # Actor-facing real-time balance refresh. Ownership/household policy applies
+    # (see policies block). The change module loads access_token + accounts with
+    # authorize?: false tightly scoped to that single load — see AGENT_SECURITY.md
+    # rule 6 for the full list of permitted access_token load sites.
+    update :fetch_realtime_balances do
+      description "Triggers a real-time Plaid /accounts/balance/get call for this item."
+
+      accept []
+      require_atomic? false
+      change FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances
+    end
   end
 
   policies do
@@ -88,12 +110,22 @@ defmodule FinanceSmith.Banking.PlaidItem do
       authorize_if actor_present()
     end
 
+    # User-facing balance refresh: actor must own this item or share a household.
+    # Kept as a dedicated policy so the intent is explicit and auditable.
+    policy action(:fetch_realtime_balances) do
+      authorize_if expr(
+                     user_id == ^actor(:id) or
+                       (not is_nil(^actor(:household_id)) and
+                          user.household_id == ^actor(:household_id))
+                   )
+    end
+
     # All other writes are system-only. SyncWorker / complete_sync call with
     # `authorize?: false`, bypassing policies entirely. The `forbid_unless`
-    # passes (no decision) for :create_from_public_token, which is already
-    # covered by its own policy above; it forbids every other actor-driven write.
+    # allowlist passes (no decision) for the two actor-driven writes above;
+    # it forbids every other actor-driven write path.
     policy action_type([:create, :update, :destroy]) do
-      forbid_unless action(:create_from_public_token)
+      forbid_unless action([:create_from_public_token, :fetch_realtime_balances])
       authorize_if always()
     end
   end
@@ -120,6 +152,13 @@ defmodule FinanceSmith.Banking.PlaidItem do
     attribute :institution_name, :string
 
     attribute :last_synced_at, :utc_datetime_usec do
+      public? true
+    end
+
+    # Tracks the last time a real-time Plaid /accounts/balance/get call succeeded.
+    # nil means a paid fetch has never been performed. Used by SyncWorker to gate
+    # the 24-hour rate limit window and by the UI to surface the cost warning.
+    attribute :last_balance_synced_at, :utc_datetime_usec do
       public? true
     end
 

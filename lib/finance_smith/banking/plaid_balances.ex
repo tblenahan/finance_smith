@@ -2,9 +2,11 @@ defmodule FinanceSmith.Banking.PlaidBalances do
   @moduledoc """
   Shared helpers for converting Plaid balance maps to integer cents.
 
-  Used by both `ExchangePublicToken` (on initial account creation) and
-  `SyncWorker` (on periodic balance refresh) to ensure consistent conversion
-  logic across the two Plaid-facing paths.
+  Used by `ExchangePublicToken` (on initial account creation), `SyncWorker`
+  (on periodic real-time balance refresh), `TransactionProcessor` (on cached
+  balance extraction from the sync payload), and `BalanceRefresh` (shared
+  real-time fetch helper) to ensure consistent conversion logic across all
+  Plaid-facing paths.
   """
 
   @doc """
@@ -18,6 +20,22 @@ defmodule FinanceSmith.Banking.PlaidBalances do
   end
 
   def balance_to_cents(_), do: nil
+
+  @doc """
+  Returns the `available` balance as integer cents, or `nil` if unavailable.
+
+  Certain account types (e.g. investment accounts, some savings accounts) do
+  not provide an available balance. `nil` is a valid and expected return value
+  and must be tolerated by all callers.
+  """
+  @spec balance_available_to_cents(map() | nil) :: integer() | nil
+  def balance_available_to_cents(nil), do: nil
+
+  def balance_available_to_cents(%{available: available}) when is_number(available) do
+    round(available * 100)
+  end
+
+  def balance_available_to_cents(_), do: nil
 
   @doc """
   Returns the credit `limit` as integer cents, or `nil` if unavailable.
