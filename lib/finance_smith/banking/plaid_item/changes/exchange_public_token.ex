@@ -107,6 +107,7 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.ExchangePublicToken do
       type: PlaidStrings.normalize(plaid_account.type),
       subtype: PlaidStrings.normalize(plaid_account.subtype),
       current_balance: PlaidBalances.balance_to_cents(plaid_account.balances),
+      available_balance: PlaidBalances.balance_available_to_cents(plaid_account.balances),
       credit_limit: PlaidBalances.balance_limit_to_cents(plaid_account.balances)
     }
 

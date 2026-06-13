@@ -10,7 +10,7 @@ defmodule FinanceSmith.Banking.PlaidItemBalanceTest do
   import FinanceSmith.BankingFixtures
 
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.PlaidItem
+  alias FinanceSmith.Banking.{BalanceRefresh, PlaidItem}
   alias FinanceSmith.Identity
 
   require Ash.Query
@@ -209,6 +209,62 @@ defmodule FinanceSmith.Banking.PlaidItemBalanceTest do
       # Timestamp must remain nil
       reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
       assert is_nil(reloaded.last_balance_synced_at)
+    end
+
+    test "rejects refresh when balances are fresh and force is false" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      _account = create_account!(plaid_item, %{plaid_account_id: "acc_fresh_gate"})
+
+      fresh_item =
+        plaid_item
+        |> Ash.Changeset.for_update(:update_balance_timestamp, %{}, authorize?: false)
+        |> Ash.update!(authorize?: false)
+
+      assert BalanceRefresh.fresh?(fresh_item.last_balance_synced_at)
+
+      assert {:error, _} =
+               Banking.fetch_realtime_balances(plaid_item.id, %{force: false}, actor: user)
+
+      reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
+
+      assert DateTime.compare(reloaded.last_balance_synced_at, fresh_item.last_balance_synced_at) ==
+               :eq
+    end
+
+    test "allows refresh when balances are fresh and force is true" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      _account = create_account!(plaid_item, %{plaid_account_id: "acc_force_refresh"})
+      token = Ash.load!(plaid_item, :access_token, authorize?: false).access_token
+
+      _fresh_item =
+        plaid_item
+        |> Ash.Changeset.for_update(:update_balance_timestamp, %{}, authorize?: false)
+        |> Ash.update!(authorize?: false)
+
+      expect(FinanceSmith.Banking.MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        {:ok,
+         %Plaid.Accounts{
+           accounts: [
+             %Plaid.Accounts.Account{
+               account_id: "acc_force_refresh",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 750.0,
+                 available: 700.0,
+                 limit: nil
+               }
+             }
+           ],
+           item: nil,
+           request_id: "req_force"
+         }}
+      end)
+
+      assert {:ok, updated_item} =
+               Banking.fetch_realtime_balances(plaid_item.id, %{force: true}, actor: user)
+
+      refute is_nil(updated_item.last_balance_synced_at)
     end
   end
 

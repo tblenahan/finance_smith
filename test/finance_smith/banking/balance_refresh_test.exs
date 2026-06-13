@@ -168,6 +168,49 @@ defmodule FinanceSmith.Banking.BalanceRefreshTest do
 
       assert :ok = BalanceRefresh.run(item)
     end
+
+    test "returns {:error, :partial_update} when a matched account update fails" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account_ok = create_account!(plaid_item, %{plaid_account_id: "acc_ok"})
+      account_fail = create_account!(plaid_item, %{plaid_account_id: "acc_fail"})
+      item = load_item_with_token_and_accounts!(plaid_item)
+      token = item.access_token
+
+      Ash.destroy!(account_fail, authorize?: false)
+
+      expect(FinanceSmith.Banking.MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        {:ok,
+         %Plaid.Accounts{
+           accounts: [
+             %Plaid.Accounts.Account{
+               account_id: "acc_ok",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 100.0,
+                 available: 90.0,
+                 limit: nil
+               }
+             },
+             %Plaid.Accounts.Account{
+               account_id: "acc_fail",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 200.0,
+                 available: 180.0,
+                 limit: nil
+               }
+             }
+           ],
+           item: nil,
+           request_id: "req_partial"
+         }}
+      end)
+
+      assert {:error, :partial_update} = BalanceRefresh.run(item)
+
+      updated = Ash.get!(Account, account_ok.id, authorize?: false)
+      assert updated.current_balance == 10_000
+      assert updated.available_balance == 9000
+    end
   end
 
   describe "stale?/1 and fresh?/1" do

@@ -129,7 +129,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
               "[SyncWorker] ProcessWorker enqueue failed, falling back to in-memory processing. plaid_item=#{plaid_item.id} reason=#{inspect(reason)}"
             )
 
-            TransactionProcessor.process(plaid_item, payload)
+            TransactionProcessor.process(plaid_item, payload, apply_cached_balances?: false)
         end
 
       {:error, reason} ->
@@ -137,7 +137,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
           "[SyncWorker] B2 upload failed, falling back to in-memory processing. plaid_item=#{plaid_item.id} reason=#{inspect(reason)}"
         )
 
-        TransactionProcessor.process(plaid_item, payload)
+        TransactionProcessor.process(plaid_item, payload, apply_cached_balances?: false)
     end
   end
 

@@ -88,6 +88,12 @@ defmodule FinanceSmith.Banking.PlaidItem do
       description "Triggers a real-time Plaid /accounts/balance/get call for this item."
 
       accept []
+
+      argument :force, :boolean do
+        default false
+        allow_nil? false
+      end
+
       require_atomic? false
       change FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances
     end

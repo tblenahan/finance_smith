@@ -13,10 +13,12 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
 
   ## Error resilience
 
-  Per-account update failures are logged as warnings and skipped; the run
-  continues for remaining accounts. A Plaid API error causes `{:error, reason}`
-  to be returned to the caller, which decides whether to bump the timestamp
-  (SyncWorker does not; FetchRealtimeBalances does not).
+  Per-account update failures are logged as warnings; the run continues for
+  remaining accounts but returns `{:error, :partial_update}` if any matched
+  non-duplicate account fails to persist. Callers must only advance
+  `last_balance_synced_at` on `:ok`. A Plaid API error returns
+  `{:error, reason}`. Duplicates and unknown `plaid_account_id` values are
+  skipped and do not count as failures.
 
   ## Security
 
@@ -66,8 +68,9 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   on `plaid_item`, then persists current/available/limit for each matching
   non-duplicate account.
 
-  Returns `:ok` on success or `{:error, reason}` if the Plaid API call fails.
-  Individual per-account DB errors are logged as warnings and do not propagate.
+  Returns `:ok` when all matched account updates succeed, `{:error, :partial_update}`
+  when any matched non-duplicate account fails to persist, or `{:error, reason}`
+  if the Plaid API call fails.
   """
   @spec run(PlaidItem.t()) :: :ok | {:error, term()}
   def run(%PlaidItem{access_token: token, accounts: accounts} = plaid_item) do
@@ -75,15 +78,24 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
       {:ok, %{accounts: plaid_accounts}} ->
         account_lookup = Map.new(accounts, fn a -> {a.plaid_account_id, a} end)
 
-        Enum.each(plaid_accounts, fn plaid_account ->
-          update_account_balance(plaid_account, account_lookup, plaid_item.id)
-        end)
+        failed? =
+          Enum.any?(plaid_accounts, fn plaid_account ->
+            update_account_balance(plaid_account, account_lookup, plaid_item.id) == :error
+          end)
 
-        Logger.info(
-          "[BalanceRefresh] Balances refreshed. plaid_item=#{plaid_item.id} accounts=#{length(plaid_accounts)}"
-        )
+        if failed? do
+          Logger.warning(
+            "[BalanceRefresh] Partial balance update failure. plaid_item=#{plaid_item.id} accounts=#{length(plaid_accounts)}"
+          )
 
-        :ok
+          {:error, :partial_update}
+        else
+          Logger.info(
+            "[BalanceRefresh] Balances refreshed. plaid_item=#{plaid_item.id} accounts=#{length(plaid_accounts)}"
+          )
+
+          :ok
+        end
 
       {:error, reason} ->
         Logger.warning(
@@ -116,6 +128,8 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
             Logger.warning(
               "[BalanceRefresh] Balance update failed for account=#{account.id} — skipping. reason=#{inspect(reason)}"
             )
+
+            :error
         end
 
       {:ok, %Account{id: account_id, duplicate_of_id: _}} ->
@@ -123,10 +137,14 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
           "[BalanceRefresh] Skipping duplicate account=#{account_id} plaid_account_id=#{plaid_account.account_id}"
         )
 
+        :ok
+
       :error ->
         Logger.warning(
           "[BalanceRefresh] Unknown plaid_account_id=#{plaid_account.account_id} for plaid_item=#{plaid_item_id} — skipping"
         )
+
+        :ok
     end
   end
 
