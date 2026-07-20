@@ -31,6 +31,7 @@ defmodule FinanceSmithWeb.AccountLive do
       |> assign(:plaid_item, plaid_item)
       |> assign(:show_balance_warning, false)
       |> assign(:balance_refresh_loading, false)
+      |> assign(:balance_refresh_force, false)
       |> assign(:balance_fresh_hours, @balance_fresh_hours)
       |> assign(:page, nil)
       |> assign(:tx_params, TransactionLiveHelpers.default_tx_params())
@@ -129,6 +130,7 @@ defmodule FinanceSmithWeb.AccountLive do
     socket =
       socket
       |> assign(:balance_refresh_loading, false)
+      |> assign(:balance_refresh_force, false)
       |> assign(:account, updated_account)
       |> assign(:plaid_item, updated_plaid_item)
       |> put_flash(:info, "Sync complete. Inevitable.")
@@ -145,25 +147,24 @@ defmodule FinanceSmithWeb.AccountLive do
     account_id = socket.assigns.account_id
     updated_account = load_account(user, account_id)
     updated_plaid_item = load_plaid_item_summary(user, updated_account)
+    force? = socket.assigns.balance_refresh_force
 
     socket =
       socket
       |> assign(:balance_refresh_loading, false)
+      |> assign(:balance_refresh_force, false)
       |> assign(:account, updated_account)
       |> assign(:plaid_item, updated_plaid_item)
 
-    if updated_plaid_item && BalanceRefresh.fresh?(updated_plaid_item.last_balance_synced_at) do
-      # The freshly-reloaded item is within the window — this was a stale
-      # force: false request racing a concurrent refresh (e.g. a background
-      # SyncWorker run) that already claimed it, not a real failure. Show
-      # the cost advisory instead of an "already fresh" error so the user
-      # isn't stuck retrying the same rejected request.
+    # Remap to the cost advisory only for force: false :already_fresh races —
+    # a concurrent claim left the window fresh, so retrying force: false would
+    # loop. force: true failures must always surface the real Ash error: CAS
+    # restore often leaves the previous fresh stamp, and treating that as
+    # "already fresh" would hide Plaid/partial failures behind the advisory.
+    if (not force? and updated_plaid_item) &&
+         BalanceRefresh.fresh?(updated_plaid_item.last_balance_synced_at) do
       {:noreply, assign(socket, :show_balance_warning, true)}
     else
-      # Surface the Ash-level cause (item missing, partial persist, or Plaid
-      # API failure) instead of a single generic message, so users and tests
-      # can distinguish these outcomes rather than seeing them collapsed into
-      # one indistinguishable flash.
       {:noreply, put_flash(socket, :error, AshErrorHTML.format_for_user(reason))}
     end
   end
@@ -178,6 +179,7 @@ defmodule FinanceSmithWeb.AccountLive do
     socket =
       socket
       |> assign(:balance_refresh_loading, false)
+      |> assign(:balance_refresh_force, false)
       |> put_flash(
         :error,
         "We have a... discrepancy. The real-time balance fetch failed."
@@ -237,7 +239,7 @@ defmodule FinanceSmithWeb.AccountLive do
             </.button>
             <%= if @plaid_item.last_balance_synced_at do %>
               <p class="font-mono text-[10px] text-gray-600 uppercase tracking-widest">
-                Last real-time fetch: {format_datetime(@plaid_item.last_balance_synced_at)}
+                Last balance refresh claimed: {format_datetime(@plaid_item.last_balance_synced_at)}
               </p>
             <% end %>
           </div>
@@ -251,8 +253,8 @@ defmodule FinanceSmithWeb.AccountLive do
             Cost advisory
           </p>
           <p class="text-sm text-gray-300">
-            Balances were updated less than {@balance_fresh_hours} hours ago. Requesting a real-time
-            update now will incur additional API charges. Proceed?
+            A paid balance-refresh window was claimed less than {@balance_fresh_hours} hours ago.
+            Requesting another real-time update now will incur additional API charges. Proceed?
           </p>
           <div class="flex items-center gap-3">
             <.button
@@ -302,6 +304,7 @@ defmodule FinanceSmithWeb.AccountLive do
 
     socket
     |> assign(:balance_refresh_loading, true)
+    |> assign(:balance_refresh_force, force?)
     |> start_async(:balance_refresh, fn ->
       Banking.fetch_realtime_balances(plaid_item.id, %{force: force?}, actor: user)
     end)

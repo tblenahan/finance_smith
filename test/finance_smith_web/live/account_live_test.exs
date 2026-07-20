@@ -333,6 +333,7 @@ defmodule FinanceSmithWeb.AccountLiveTest do
           account: account,
           plaid_item: stale_plaid_item,
           balance_refresh_loading: true,
+          balance_refresh_force: false,
           show_balance_warning: false
         }
       }
@@ -342,8 +343,43 @@ defmodule FinanceSmithWeb.AccountLiveTest do
 
       assert updated_socket.assigns.show_balance_warning
       refute updated_socket.assigns.balance_refresh_loading
+      refute updated_socket.assigns.balance_refresh_force
       assert BalanceRefresh.fresh?(updated_socket.assigns.plaid_item.last_balance_synced_at)
       refute Map.has_key?(updated_socket.assigns.flash, "error")
+    end
+
+    # Regression test for review finding: after a cost-advisory Proceed
+    # (force: true), a Plaid failure restores the previous fresh stamp via
+    # CAS. handle_async/3 must flash the real error — not reopen the
+    # advisory — otherwise users loop on Proceed without seeing the failure.
+    test "force: true Plaid failure flashes the error instead of reopening the cost advisory", %{
+      conn: conn
+    } do
+      user = register_user!()
+      plaid_item = BankingFixtures.create_plaid_item!(user)
+
+      account =
+        BankingFixtures.create_account!(plaid_item, %{plaid_account_id: "acc_live_force_fail"})
+
+      token = Ash.load!(plaid_item, :access_token, authorize?: false).access_token
+
+      _fresh_item =
+        plaid_item
+        |> Ash.Changeset.for_update(:update_balance_timestamp, %{}, authorize?: false)
+        |> Ash.update!(authorize?: false)
+
+      expect(FinanceSmith.Banking.MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        {:error, %Plaid.Error{error_code: "ITEM_LOGIN_REQUIRED"}}
+      end)
+
+      {:ok, view, _html} = conn |> log_in_user(user) |> live_account(account.id)
+
+      view |> element("button", "Refresh Balance") |> render_click()
+      view |> element("button", "Proceed") |> render_click()
+
+      html = render_async(view)
+      assert html =~ "We have a... discrepancy. The real-time balance fetch failed."
+      refute html =~ "Cost advisory"
     end
   end
 end

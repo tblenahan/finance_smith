@@ -199,25 +199,28 @@ defmodule FinanceSmith.DataLake.SyncWorker do
   #
   # 1. This background run and a concurrent user-triggered UI refresh could
   #    otherwise both observe "stale" and both issue a paid Plaid call.
-  # 2. Applying free cached balances from the sync payload before checking
-  #    staleness could overwrite a fresher paid refresh that completed
+  # 2. Applying free cached balances from the sync payload without winning
+  #    that claim could overwrite a fresher paid refresh that completed
   #    concurrently (e.g. a `force: true` UI refresh). A `force: true` UI
-  #    refresh now also claims (and stamps `last_balance_synced_at`) via
+  #    refresh also claims (and stamps `last_balance_synced_at`) via
   #    BalanceRefresh.force_claim_paid_refresh/1 *before* it calls Plaid — see
   #    BalanceRefresh's "The `force: true` claim" moduledoc section — so once
   #    that claim commits, this claim sees a fresh timestamp and skips both
-  #    the cached apply and its own paid fetch entirely.
+  #    the paid fetch and any cached fallback entirely.
   #
-  # Only the initial claim step is transactional, so this run's own
-  # cached-apply-then-paid-fetch sequence still runs outside any lock and can
-  # interleave with a `force: true` claim that wins the row lock immediately
-  # after. BalanceRefresh.claim_still_held?/2 re-checks ownership before each
-  # subsequent step (before the cached apply, and again before the paid
-  # fetch) and skips the remaining work — without restoring — if a newer
-  # claim has already superseded this one; see BalanceRefresh moduledoc for
-  # why proceeding after losing ownership, or restoring in that case, would
-  # be wrong. This narrows but does not fully close the residual overlap
-  # window, which remains an accepted tradeoff.
+  # After winning the claim, this run issues the paid fetch first. Free
+  # cached balances from the sync payload are applied only as a same-run
+  # fallback when the paid fetch fails *and* the claim is still held —
+  # never before the paid attempt. That ordering closes the residual race
+  # where a concurrent force refresh could land fresher paid balances while
+  # this run was still applying older cached values, then skip its own paid
+  # fetch after noticing the claim was superseded.
+  #
+  # BalanceRefresh.claim_still_held?/2 re-checks ownership before the paid
+  # fetch and again before any cached fallback, and skips the remaining
+  # work — without restoring — if a newer claim has already superseded this
+  # one; see BalanceRefresh moduledoc for why proceeding after losing
+  # ownership, or restoring in that case, would be wrong.
   #
   # A paid-fetch failure (Plaid API error or partial persistence failure)
   # logs a warning but does NOT raise (stale balances never abort a sync run
@@ -251,29 +254,29 @@ defmodule FinanceSmith.DataLake.SyncWorker do
   defp apply_claimed_balances(%PlaidItem{} = plaid_item, payload_accounts, claimed_at) do
     if BalanceRefresh.claim_still_held?(plaid_item.id, claimed_at) do
       Logger.info(
-        "[SyncWorker] Balance stale — applying cached and fetching real-time. plaid_item=#{plaid_item.id}"
+        "[SyncWorker] Balance stale — fetching real-time (cached fallback only on paid failure). plaid_item=#{plaid_item.id}"
       )
 
-      TransactionProcessor.apply_cached_balances(plaid_item, payload_accounts)
+      case BalanceRefresh.run(plaid_item) do
+        :ok ->
+          :ok
 
-      if BalanceRefresh.claim_still_held?(plaid_item.id, claimed_at) do
-        case BalanceRefresh.run(plaid_item) do
-          :ok ->
-            :ok
+        {:error, reason} ->
+          Logger.warning(
+            "[SyncWorker] Real-time balance fetch failed — sync still complete, leaving the 24h window spent. plaid_item=#{plaid_item.id} reason=#{inspect(reason)}"
+          )
 
-          {:error, reason} ->
-            Logger.warning(
-              "[SyncWorker] Real-time balance fetch failed — sync still complete, leaving the 24h window spent. plaid_item=#{plaid_item.id} reason=#{inspect(reason)}"
+          if BalanceRefresh.claim_still_held?(plaid_item.id, claimed_at) do
+            TransactionProcessor.apply_cached_balances(plaid_item, payload_accounts)
+          else
+            Logger.info(
+              "[SyncWorker] Claim superseded by a concurrent refresh after paid fetch failed — skipping cached fallback. plaid_item=#{plaid_item.id}"
             )
-        end
-      else
-        Logger.info(
-          "[SyncWorker] Claim superseded by a concurrent refresh after applying cached balances — skipping paid fetch. plaid_item=#{plaid_item.id}"
-        )
+          end
       end
     else
       Logger.info(
-        "[SyncWorker] Claim superseded by a concurrent refresh before applying cached balances — skipping cached and paid updates. plaid_item=#{plaid_item.id}"
+        "[SyncWorker] Claim superseded by a concurrent refresh before paid fetch — skipping paid and cached updates. plaid_item=#{plaid_item.id}"
       )
     end
   end

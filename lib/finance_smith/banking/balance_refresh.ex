@@ -78,6 +78,12 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   `restore_balance_timestamp/3` in that case — the row's timestamp already
   reflects the newer claim's work, not this caller's.
 
+  `SyncWorker` issues the paid fetch first after winning a claim, and only
+  applies free cached sync-payload balances as a same-run fallback when that
+  paid fetch fails *and* `claim_still_held?/2` is still true. That ordering
+  prevents an older cached write from clobbering a concurrent force refresh's
+  paid balances when the background claim is superseded mid-flight.
+
   ## SyncWorker does not restore on paid failure
 
   Unlike the actor-facing path, `SyncWorker` leaves the claimed window
@@ -88,9 +94,10 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   persistently fails to update), causing every periodic sync to re-attempt
   — and re-bill — the paid call. Leaving the window spent means a broken
   item is retried at most once per `refresh_interval_hours/0`, with the
-  cached balances from the sync payload already applied as a same-run
-  fallback. A user can still force an immediate retry via `force: true` in
-  the UI, which claims (and, on failure, restores) independently.
+  cached balances from the sync payload applied as a same-run fallback when
+  the claim is still held. A user can still force an immediate retry via
+  `force: true` in the UI, which claims (and, on failure, restores)
+  independently.
 
   ## The `force: true` claim
 
@@ -104,20 +111,23 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   exactly like the non-force claim — matters because it closes the gap where
   a concurrent `SyncWorker` run's own `claim_paid_refresh/1` would otherwise
   still observe a stale/nil timestamp for the full duration of the force
-  call's Plaid round-trip, claim the window itself, and apply free cached
-  balances that could land after the force call's fresher paid balances.
-  Once the force claim's transaction commits, any concurrent
+  call's Plaid round-trip, claim the window itself, and later apply free
+  cached balances that could land after the force call's fresher paid
+  balances. Once the force claim's transaction commits, any concurrent
   `claim_paid_refresh/1` immediately observes the just-set timestamp as
-  fresh and skips both the cached apply and its own paid fetch.
+  fresh and skips both the paid fetch and any cached fallback.
 
-  This does not fully serialize the two calls' Plaid round-trips or account
-  writes — only the claim step is transactional, so a background claim that
-  wins the row lock *before* a `force: true` claim can still complete its own
-  cached-apply-then-paid-fetch sequence concurrently with (and interleaved
-  with) the force call's own fetch. Two overlapping `force: true` calls, or a
+  This does not fully serialize overlapping Plaid round-trips — only the
+  claim step is transactional, so a background claim that wins the row lock
+  *before* a `force: true` claim can still issue its own paid fetch
+  concurrently with the force call. Two overlapping `force: true` calls, or a
   forced refresh racing a background claim that already won, can still both
   bill Plaid — this remains an accepted tradeoff of the explicit user
-  acknowledgment (see `FetchRealtimeBalances` moduledoc).
+  acknowledgment (see `FetchRealtimeBalances` moduledoc). After the
+  paid-first reorder, SyncWorker will not apply cached balances once its
+  claim has been superseded, so a concurrent force's paid write is no longer
+  at risk of being overwritten by older sync-payload cached values from the
+  background run.
   """
 
   alias FinanceSmith.Banking.{Account, PlaidBalances, PlaidItem}
@@ -284,11 +294,11 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   deleted concurrently.
 
   Intended for callers with multiple steps between claiming and finishing
-  (e.g. applying cached balances, then issuing a paid fetch) that want to
-  re-check ownership before each step rather than only trusting the
-  original claim result. See the "Concurrency — the 24h claim" module
-  section for why losing ownership must not be treated as this caller's own
-  failure.
+  (e.g. issuing a paid fetch, then optionally applying cached balances on
+  failure) that want to re-check ownership before each step rather than only
+  trusting the original claim result. See the "Concurrency — the 24h claim"
+  module section for why losing ownership must not be treated as this
+  caller's own failure.
   """
   @spec claim_still_held?(Ecto.UUID.t(), DateTime.t()) :: boolean()
   def claim_still_held?(plaid_item_id, claimed_at) do

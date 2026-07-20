@@ -164,9 +164,13 @@ defmodule FinanceSmith.Banking.PlaidItem do
       public? true
     end
 
-    # Tracks the last time a real-time Plaid /accounts/balance/get call succeeded.
-    # nil means a paid fetch has never been performed. Used by SyncWorker to gate
-    # the 24-hour rate limit window and by the UI to surface the cost warning.
+    # Paid-fetch window gate: stamped when a SyncWorker or UI refresh *claims*
+    # the 24h `/accounts/balance/get` window (before the Plaid call completes).
+    # nil means no paid-fetch window has been claimed yet. SyncWorker leaves the
+    # stamp in place even if its paid call later fails (to avoid re-billing on
+    # every sync during an outage); the actor-facing path restores on failure.
+    # Used by SyncWorker to gate the rate-limit window and by the UI to surface
+    # the cost advisory — not a guarantee that the last paid call succeeded.
     attribute :last_balance_synced_at, :utc_datetime_usec do
       public? true
     end

@@ -3,11 +3,13 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances do
   Performs a real-time Plaid `/accounts/balance/get` call for the given
   `PlaidItem` and persists the returned balances via `Account.update_cached_balances`.
 
-  On success, sets `last_balance_synced_at` to the current UTC time so that
-  `SyncWorker` and the UI can gate subsequent paid calls.
+  On success, ensures `last_balance_synced_at` reflects a current claim so
+  that `SyncWorker` and the UI can gate subsequent paid calls (the claim
+  stamps the window before Plaid; success also force-changes the attribute
+  on the Ash changeset).
 
-  On failure, adds an Ash changeset error and does NOT advance the timestamp,
-  preventing a silent stale-timestamp update.
+  On failure, restores the previous timestamp via compare-and-swap so the
+  window re-opens for a legitimate retry instead of staying silently spent.
 
   ## Concurrency
 
@@ -19,13 +21,14 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances do
   transaction). Claiming first — for both paths — closes a check-then-act
   race where a background `SyncWorker` run and a user-triggered UI refresh
   (or two browser tabs) could otherwise both observe "stale" and both issue a
-  paid Plaid call, or where `SyncWorker` could apply free cached balances
-  after a `force: true` refresh's fresher paid balances had already landed
-  but before its timestamp was stamped. If the subsequent Plaid call or
-  persistence fails, the previous timestamp is restored via
-  `BalanceRefresh.restore_balance_timestamp/3`, a compare-and-swap on the
-  claimed timestamp so it won't clobber a concurrent successful refresh, so
-  the window re-opens for a legitimate retry.
+  paid Plaid call, or where `SyncWorker` could still attempt balance writes
+  after a `force: true` refresh had already claimed the window (SyncWorker
+  now skips paid and cached fallback once it observes `:already_fresh` or a
+  superseded claim). If the subsequent Plaid call or persistence fails, the
+  previous timestamp is restored via `BalanceRefresh.restore_balance_timestamp/3`,
+  a compare-and-swap on the claimed timestamp so it won't clobber a
+  concurrent successful refresh, so the window re-opens for a legitimate
+  retry.
 
   `force: true` still bypasses the *24h staleness gate* — the user has
   already acknowledged the cost advisory in the UI — but no longer bypasses
@@ -76,7 +79,7 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances do
             changeset,
             Ash.Error.Changes.InvalidChanges.exception(
               message:
-                "We have a... discrepancy. Balances were updated less than #{BalanceRefresh.refresh_interval_hours()} hours ago."
+                "We have a... discrepancy. A paid balance-refresh window was claimed less than #{BalanceRefresh.refresh_interval_hours()} hours ago."
             )
           )
 

@@ -234,16 +234,17 @@ defmodule FinanceSmith.DataLake.SyncWorkerBalanceGatingTest do
       assert updated_ok.current_balance == 10_000
     end
 
-    # Regression test for review finding: SyncWorker's claim, cached apply,
-    # and paid fetch are three separate steps, only the first of which is
-    # transactional. This exercises a concurrent claim landing while this
-    # run's sync loop is still in flight — strictly before this run reaches
-    # its own claim_paid_refresh/1 call (the sync_transactions mock is the
-    # one deterministic hook available before that point) — simulating a
-    # concurrent force: true UI refresh or a second SyncWorker run winning
-    # the window first. This run's own claim must then observe :already_fresh
-    # and skip both the cached apply and the paid fetch entirely, rather than
-    # overwriting the fresher values the other claimant is responsible for.
+    # Regression test for review finding: SyncWorker's claim, paid fetch,
+    # and optional cached fallback are separate steps, only the first of
+    # which is transactional. This exercises a concurrent claim landing
+    # while this run's sync loop is still in flight — strictly before this
+    # run reaches its own claim_paid_refresh/1 call (the sync_transactions
+    # mock is the one deterministic hook available before that point) —
+    # simulating a concurrent force: true UI refresh or a second SyncWorker
+    # run winning the window first. This run's own claim must then observe
+    # :already_fresh and skip both the paid fetch and any cached fallback,
+    # rather than overwriting the fresher values the other claimant is
+    # responsible for.
     test "skips cached and paid updates when a concurrent claim lands before this run's own claim" do
       user = register_user!()
       plaid_item = create_plaid_item!(user)

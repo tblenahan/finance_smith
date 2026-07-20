@@ -3,7 +3,8 @@ defmodule FinanceSmith.DataLake.SyncWorkerCachedBalanceOrderingTest do
   Regression tests for cached vs paid balance ordering.
 
   Ensures async ProcessWorker jobs cannot overwrite fresher paid balances and
-  that SyncWorker applies paid fetches after cached sync values.
+  that SyncWorker issues paid fetches first, applying cached sync values only
+  as a same-run fallback when the paid fetch fails and the claim is still held.
   """
 
   use FinanceSmith.DataCase, async: false
@@ -319,8 +320,8 @@ defmodule FinanceSmith.DataLake.SyncWorkerCachedBalanceOrderingTest do
     # paid-fetch claim, so cached balances could still be applied even after
     # a concurrent force refresh had already claimed the window and
     # persisted a fresher paid balance. SyncWorker now claims the window
-    # first and only applies cached balances (and attempts a paid fetch) when
-    # it wins that same claim — modeling a concurrent force refresh that
+    # first and only attempts a paid fetch (with cached fallback on failure)
+    # when it wins that same claim — modeling a concurrent force refresh that
     # already claimed the window and persisted its paid balance before
     # SyncWorker's own sync run reaches the balance step.
     test "cached sync balances are skipped once a concurrent claim has already won the window" do
@@ -352,7 +353,7 @@ defmodule FinanceSmith.DataLake.SyncWorkerCachedBalanceOrderingTest do
     # call's fresher paid balances. The force path now claims (and stamps)
     # before calling Plaid, so a SyncWorker run that reaches the balance step
     # after the force claim has committed must observe the window as fresh
-    # and skip both the cached apply and its own paid fetch — get_balance is
+    # and skip both the paid fetch and any cached fallback — get_balance is
     # only expected once, from the force call itself.
     test "cached sync balances are skipped once a concurrent force refresh has already claimed the window" do
       user = register_user!()
@@ -393,6 +394,50 @@ defmodule FinanceSmith.DataLake.SyncWorkerCachedBalanceOrderingTest do
       reloaded = Ash.get!(Account, account.id, authorize?: false)
       assert reloaded.current_balance == 300_000
     end
+
+    # Regression test for review finding: SyncWorker used to apply cached
+    # balances *before* the paid fetch. If a concurrent force refresh claimed
+    # the window and wrote fresher paid balances while SyncWorker was mid
+    # cached-apply, SyncWorker would then skip paid (claim superseded) and
+    # leave the older cached values under a fresh stamp. Paid-first +
+    # claim_still_held? before the cached fallback closes that race: when
+    # get_balance runs, a concurrent force claim + paid write lands, then
+    # this run's paid call fails — the claim is no longer held, so the
+    # sync-payload cached fallback must not overwrite the force-paid value.
+    test "cached fallback is skipped when a concurrent force supersedes during the paid fetch" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account = create_account!(plaid_item, %{plaid_account_id: "acc_paid_supersede"})
+      assert is_nil(plaid_item.last_balance_synced_at)
+
+      token = Ash.load!(plaid_item, :access_token, authorize?: false).access_token
+
+      stub_sync_with_accounts(token, account.plaid_account_id, 1234.0)
+
+      expect(MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        assert {:claimed, _previous, claimed_at} =
+                 BalanceRefresh.force_claim_paid_refresh(plaid_item.id)
+
+        # PostgreSQL `now()` is transaction-start time; two claims in the same
+        # clock tick can share a timestamp, which would leave claim_still_held?
+        # true. Advance past the SyncWorker claim so supersession is unambiguous.
+        later = DateTime.add(claimed_at, 2, :second)
+
+        plaid_item
+        |> Ash.Changeset.for_update(:update, %{}, authorize?: false)
+        |> Ash.Changeset.force_change_attribute(:last_balance_synced_at, later)
+        |> Ash.update!(authorize?: false)
+
+        set_account_balance!(account, 300_000)
+
+        {:error, %Plaid.Error{error_code: "INSTITUTION_DOWN"}}
+      end)
+
+      assert :ok = perform_job(SyncWorker, %{"plaid_item_id" => plaid_item.id})
+
+      reloaded = Ash.get!(Account, account.id, authorize?: false)
+      assert reloaded.current_balance == 300_000
+    end
   end
 
   # Regression test for review finding: Plaid's /transactions/sync only
@@ -402,7 +447,7 @@ defmodule FinanceSmith.DataLake.SyncWorkerCachedBalanceOrderingTest do
   # apply_cached_balances_and_maybe_refresh_realtime/2, so an account whose
   # only activity landed on an earlier page never got its cached balance
   # applied. SyncWorker now merges accounts by account_id across all pages
-  # before applying cached balances.
+  # before the paid-first / cached-fallback balance step.
   describe "multi-page sync merges cached balances across pages" do
     test "accounts appearing on different pages both receive cached balance updates" do
       user = register_user!()
