@@ -12,6 +12,7 @@ defmodule FinanceSmith.DataLake.SyncWorkerCachedBalanceOrderingTest do
   import Mox
   import FinanceSmith.BankingFixtures
 
+  alias FinanceSmith.Banking
   alias FinanceSmith.Banking.{Account, BalanceRefresh, MockPlaid, PlaidItem}
   alias FinanceSmith.Banking.Plaid.SyncTransactionsResponse
   alias FinanceSmith.DataLake.{SyncWorker, TransactionProcessor}
@@ -92,7 +93,33 @@ defmodule FinanceSmith.DataLake.SyncWorkerCachedBalanceOrderingTest do
       assert updated.current_balance == 200_000
     end
 
-    test "still applies cached balances by default" do
+    # Regression test for review finding: process/2 used to default
+    # apply_cached_balances? to true. Omitting the option entirely (rather
+    # than passing false explicitly) must also skip the cached-balance write.
+    test "does not apply cached balances when the option is omitted entirely" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account = create_account!(plaid_item, %{plaid_account_id: "acc_default_omitted"})
+
+      plaid_item =
+        plaid_item |> Ash.load!([:accounts, user: :household], authorize?: false)
+
+      set_account_balance!(account, 200_000)
+
+      payload = balance_only_payload(account.plaid_account_id, 1000.00)
+
+      assert :ok = TransactionProcessor.process(plaid_item, payload)
+
+      updated = Ash.get!(Account, account.id, authorize?: false)
+      assert updated.current_balance == 200_000
+    end
+
+    # Regression test for review finding: process/2 used to default
+    # apply_cached_balances? to true, so any new direct caller that omitted
+    # the option would silently apply free cached balances outside
+    # SyncWorker's claim-gated path. The default is now false; callers must
+    # opt in explicitly.
+    test "applies cached balances when explicitly opted in" do
       user = register_user!()
       plaid_item = create_plaid_item!(user)
       account = create_account!(plaid_item, %{plaid_account_id: "acc_apply_cached"})
@@ -104,7 +131,8 @@ defmodule FinanceSmith.DataLake.SyncWorkerCachedBalanceOrderingTest do
 
       payload = balance_only_payload(account.plaid_account_id, 1000.00)
 
-      assert :ok = TransactionProcessor.process(plaid_item, payload)
+      assert :ok =
+               TransactionProcessor.process(plaid_item, payload, apply_cached_balances?: true)
 
       updated = Ash.get!(Account, account.id, authorize?: false)
       assert updated.current_balance == 100_000
@@ -313,6 +341,57 @@ defmodule FinanceSmith.DataLake.SyncWorkerCachedBalanceOrderingTest do
 
       reloaded = Ash.get!(Account, account.id, authorize?: false)
       assert reloaded.current_balance == 900_000
+    end
+
+    # Regression test for review finding: force: true previously only
+    # stamped last_balance_synced_at via an Ash attribute write *after*
+    # BalanceRefresh.run/1 completed, so a concurrent SyncWorker run's own
+    # claim_paid_refresh/1 could still observe a stale/nil timestamp for the
+    # full duration of the force call's Plaid round-trip, claim the window
+    # itself, and apply free cached balances that could land after the force
+    # call's fresher paid balances. The force path now claims (and stamps)
+    # before calling Plaid, so a SyncWorker run that reaches the balance step
+    # after the force claim has committed must observe the window as fresh
+    # and skip both the cached apply and its own paid fetch — get_balance is
+    # only expected once, from the force call itself.
+    test "cached sync balances are skipped once a concurrent force refresh has already claimed the window" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account = create_account!(plaid_item, %{plaid_account_id: "acc_force_claim"})
+      assert is_nil(plaid_item.last_balance_synced_at)
+
+      token = Ash.load!(plaid_item, :access_token, authorize?: false).access_token
+
+      expect(MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        {:ok,
+         %Plaid.Accounts{
+           accounts: [
+             %Plaid.Accounts.Account{
+               account_id: "acc_force_claim",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 3000.0,
+                 available: nil,
+                 limit: nil
+               }
+             }
+           ],
+           item: nil,
+           request_id: "req_force_claim"
+         }}
+      end)
+
+      assert {:ok, _updated_item} =
+               Banking.fetch_realtime_balances(plaid_item.id, %{force: true}, actor: user)
+
+      updated = Ash.get!(Account, account.id, authorize?: false)
+      assert updated.current_balance == 300_000
+
+      stub_sync_with_accounts(token, account.plaid_account_id, 1234.0)
+
+      assert :ok = perform_job(SyncWorker, %{"plaid_item_id" => plaid_item.id})
+
+      reloaded = Ash.get!(Account, account.id, authorize?: false)
+      assert reloaded.current_balance == 300_000
     end
   end
 end

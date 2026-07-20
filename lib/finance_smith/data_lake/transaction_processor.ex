@@ -59,11 +59,23 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
   inside `process/2` if not already present.
   `payload` is a string-keyed map as produced by `Uploader.to_sync_payload/1`.
 
+  ## Options
+
+  - `:apply_cached_balances?` (boolean, default `false`) — when `true`,
+    applies the free cached balances from `payload["accounts"]` after the
+    transaction commits. Defaults to `false` because cached-balance writes
+    are owned by `SyncWorker`'s claim-gated path
+    (`apply_cached_balances_and_maybe_refresh_realtime/2`), which only calls
+    `TransactionProcessor.apply_cached_balances/2` directly after winning a
+    `BalanceRefresh.claim_paid_refresh/1` claim — never through this option.
+    Callers must opt in explicitly; defaulting to `true` would let any new
+    direct caller silently write cached balances outside that claim gate.
+
   Returns `:ok` or raises on failure.
   """
   @spec process(PlaidItem.t(), map(), keyword()) :: :ok
   def process(%PlaidItem{} = plaid_item, payload, opts \\ []) when is_map(payload) do
-    apply_cached_balances? = Keyword.get(opts, :apply_cached_balances?, true)
+    apply_cached_balances? = Keyword.get(opts, :apply_cached_balances?, false)
 
     Logger.info(
       "[TransactionProcessor] Processing. plaid_item=#{plaid_item.id} added=#{length(payload["added"] || [])} modified=#{length(payload["modified"] || [])} removed=#{length(payload["removed"] || [])}"

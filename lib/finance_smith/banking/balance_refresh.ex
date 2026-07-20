@@ -58,6 +58,33 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   concurrent `force: true` UI refresh has already succeeded and advanced the
   timestamp again — without the CAS, the restore would silently erase that
   successful refresh's timestamp.
+
+  ## The `force: true` claim
+
+  `force_claim_paid_refresh/1` shares the same `SELECT ... FOR UPDATE` +
+  `UPDATE` transaction as `claim_paid_refresh/1`, but skips the `stale?/1`
+  gate — it always advances `last_balance_synced_at` (or returns `:not_found`
+  for a deleted item), since a `force: true` caller has already acknowledged
+  the cost advisory and is not subject to the 24h window.
+
+  Stamping *before* the Plaid call — inside the same locked transaction,
+  exactly like the non-force claim — matters because it closes the gap where
+  a concurrent `SyncWorker` run's own `claim_paid_refresh/1` would otherwise
+  still observe a stale/nil timestamp for the full duration of the force
+  call's Plaid round-trip, claim the window itself, and apply free cached
+  balances that could land after the force call's fresher paid balances.
+  Once the force claim's transaction commits, any concurrent
+  `claim_paid_refresh/1` immediately observes the just-set timestamp as
+  fresh and skips both the cached apply and its own paid fetch.
+
+  This does not fully serialize the two calls' Plaid round-trips or account
+  writes — only the claim step is transactional, so a background claim that
+  wins the row lock *before* a `force: true` claim can still complete its own
+  cached-apply-then-paid-fetch sequence concurrently with (and interleaved
+  with) the force call's own fetch. Two overlapping `force: true` calls, or a
+  forced refresh racing a background claim that already won, can still both
+  bill Plaid — this remains an accepted tradeoff of the explicit user
+  acknowledgment (see `FetchRealtimeBalances` moduledoc).
   """
 
   alias FinanceSmith.Banking.{Account, PlaidBalances, PlaidItem}
@@ -119,6 +146,31 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   @spec claim_paid_refresh(Ecto.UUID.t()) ::
           {:claimed, DateTime.t() | nil, DateTime.t()} | :already_fresh | :not_found
   def claim_paid_refresh(plaid_item_id) do
+    do_claim(plaid_item_id, force?: false)
+  end
+
+  @doc """
+  Atomically claims the right to perform a `force: true` paid Plaid balance
+  fetch for the `PlaidItem` with the given id, bypassing the 24h staleness
+  gate (see "The `force: true` claim" above).
+
+  Shares the same locked claim transaction as `claim_paid_refresh/1`, so it
+  always advances `last_balance_synced_at` to now and returns
+  `{:claimed, previous_last_balance_synced_at, claimed_at}` — the caller must
+  persist both values via `restore_balance_timestamp/3` if the subsequent
+  Plaid call or persistence fails. Returns `:not_found` when no `PlaidItem`
+  with this id exists.
+  """
+  @spec force_claim_paid_refresh(Ecto.UUID.t()) ::
+          {:claimed, DateTime.t() | nil, DateTime.t()} | :not_found
+  def force_claim_paid_refresh(plaid_item_id) do
+    case do_claim(plaid_item_id, force?: true) do
+      {:claimed, _previous, _claimed_at} = claimed -> claimed
+      :not_found -> :not_found
+    end
+  end
+
+  defp do_claim(plaid_item_id, force?: force?) do
     dumped_id = Ecto.UUID.dump!(plaid_item_id)
 
     {:ok, result} =
@@ -138,7 +190,7 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
           %{rows: [[previous]]} ->
             previous_utc = naive_to_utc(previous)
 
-            if stale?(previous_utc) do
+            if force? or stale?(previous_utc) do
               %{rows: [[claimed]]} =
                 Repo.query!(
                   """

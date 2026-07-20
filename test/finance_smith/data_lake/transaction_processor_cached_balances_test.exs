@@ -60,7 +60,8 @@ defmodule FinanceSmith.DataLake.TransactionProcessorCachedBalancesTest do
 
       payload = balance_only_payload(account.plaid_account_id, 2500.00, 2100.50, nil)
 
-      assert :ok = TransactionProcessor.process(plaid_item, payload)
+      assert :ok =
+               TransactionProcessor.process(plaid_item, payload, apply_cached_balances?: true)
 
       updated = Ash.get!(Account, account.id, authorize?: false)
       assert updated.current_balance == 250_000
@@ -74,7 +75,8 @@ defmodule FinanceSmith.DataLake.TransactionProcessorCachedBalancesTest do
 
       payload = balance_only_payload(account.plaid_account_id, 1000.00, nil, nil)
 
-      assert :ok = TransactionProcessor.process(plaid_item, payload)
+      assert :ok =
+               TransactionProcessor.process(plaid_item, payload, apply_cached_balances?: true)
 
       updated = Ash.get!(Account, account.id, authorize?: false)
       assert updated.current_balance == 100_000
@@ -94,7 +96,8 @@ defmodule FinanceSmith.DataLake.TransactionProcessorCachedBalancesTest do
 
       payload = balance_only_payload(account.plaid_account_id, 450.00, nil, 5000.00)
 
-      assert :ok = TransactionProcessor.process(plaid_item, payload)
+      assert :ok =
+               TransactionProcessor.process(plaid_item, payload, apply_cached_balances?: true)
 
       updated = Ash.get!(Account, account.id, authorize?: false)
       assert updated.current_balance == 45_000
@@ -130,7 +133,8 @@ defmodule FinanceSmith.DataLake.TransactionProcessorCachedBalancesTest do
 
       payload = balance_only_payload(dup_account_id, 9999.00, nil, nil)
 
-      assert :ok = TransactionProcessor.process(plaid_item, payload)
+      assert :ok =
+               TransactionProcessor.process(plaid_item, payload, apply_cached_balances?: true)
 
       # Duplicate account balance must remain unchanged (nil)
       dup =
@@ -153,7 +157,8 @@ defmodule FinanceSmith.DataLake.TransactionProcessorCachedBalancesTest do
         "has_more" => false
       }
 
-      assert :ok = TransactionProcessor.process(plaid_item, payload)
+      assert :ok =
+               TransactionProcessor.process(plaid_item, payload, apply_cached_balances?: true)
     end
   end
 end

@@ -29,9 +29,10 @@ defmodule FinanceSmith.Banking do
       define :list_accounts, action: :read_for_ui
       define :update_account_balance, action: :update_balance
 
-      # System-only. Called by BalanceRefresh and TransactionProcessor with
-      # authorize?: false. Not exposed as a user-facing interface.
-      define :update_cached_balances, action: :update_cached_balances
+      # :update_cached_balances is intentionally NOT defined here. It is
+      # system-only — called by BalanceRefresh and TransactionProcessor via
+      # Ash.Changeset.for_update/3 directly with authorize?: false — and must
+      # not be exposed as a Banking.* code interface.
     end
 
     resource FinanceSmith.Banking.Transaction do

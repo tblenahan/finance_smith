@@ -179,9 +179,18 @@ defmodule FinanceSmith.DataLake.SyncWorker do
   #    otherwise both observe "stale" and both issue a paid Plaid call.
   # 2. Applying free cached balances from the sync payload before checking
   #    staleness could overwrite a fresher paid refresh that completed
-  #    concurrently (e.g. a `force: true` UI refresh) — claiming first and
-  #    only applying cached balances when the claim succeeds means cached
-  #    values are never written after a fresher paid refresh has landed.
+  #    concurrently (e.g. a `force: true` UI refresh). A `force: true` UI
+  #    refresh now also claims (and stamps `last_balance_synced_at`) via
+  #    BalanceRefresh.force_claim_paid_refresh/1 *before* it calls Plaid — see
+  #    BalanceRefresh's "The `force: true` claim" moduledoc section — so once
+  #    that claim commits, this claim sees a fresh timestamp and skips both
+  #    the cached apply and its own paid fetch entirely. Only the claim step
+  #    itself is transactional, though: if this run wins its own claim first,
+  #    its subsequent cached-apply-then-paid-fetch sequence still runs
+  #    outside any lock and can interleave with a `force: true` claim that
+  #    wins the row lock immediately after — see BalanceRefresh moduledoc for
+  #    why this residual overlap is an accepted tradeoff rather than fully
+  #    closed here.
   #
   # On a successful claim, free cached balances from the sync payload are
   # applied first, then the paid fetch runs. A paid failure logs a warning

@@ -432,6 +432,82 @@ defmodule FinanceSmith.Banking.BalanceRefreshTest do
     end
   end
 
+  describe "force_claim_paid_refresh/1" do
+    # Regression test for review finding: force_claim_paid_refresh/1 must
+    # bypass the 24h staleness gate and advance the timestamp even when the
+    # window is already fresh — this is what lets a force: true refresh
+    # stamp before calling Plaid instead of only after persisting balances.
+    test "claims and advances the timestamp even when already fresh" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+
+      fresh_item =
+        plaid_item
+        |> Ash.Changeset.for_update(:update_balance_timestamp, %{}, authorize?: false)
+        |> Ash.update!(authorize?: false)
+
+      assert {:claimed, previous, claimed_at} =
+               BalanceRefresh.force_claim_paid_refresh(plaid_item.id)
+
+      assert DateTime.compare(previous, fresh_item.last_balance_synced_at) == :eq
+      refute is_nil(claimed_at)
+
+      reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
+      assert DateTime.diff(reloaded.last_balance_synced_at, claimed_at, :second) == 0
+    end
+
+    test "claims when never synced and returns {:claimed, nil, claimed_at}" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      assert is_nil(plaid_item.last_balance_synced_at)
+
+      assert {:claimed, nil, claimed_at} =
+               BalanceRefresh.force_claim_paid_refresh(plaid_item.id)
+
+      refute is_nil(claimed_at)
+    end
+
+    test "returns :not_found for a plaid_item_id that does not exist" do
+      assert :not_found = BalanceRefresh.force_claim_paid_refresh(Ecto.UUID.generate())
+    end
+
+    test "returns :not_found for a plaid_item that has been deleted" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      Ash.destroy!(plaid_item, authorize?: false)
+
+      assert :not_found = BalanceRefresh.force_claim_paid_refresh(plaid_item.id)
+    end
+
+    # Regression test for review finding: previously, force: true only
+    # stamped last_balance_synced_at via an Ash attribute write *after*
+    # BalanceRefresh.run/1 completed, so a concurrent claim_paid_refresh/1
+    # (e.g. from SyncWorker) could still observe a stale/nil timestamp for
+    # the full duration of the force call's Plaid round-trip. Now that the
+    # force claim stamps atomically before Plaid is ever called, a
+    # concurrent non-force claim must immediately see the window as fresh.
+    test "a concurrent claim_paid_refresh/1 after a force claim observes freshness and backs off" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+
+      assert {:claimed, nil, _claimed_at} = BalanceRefresh.force_claim_paid_refresh(plaid_item.id)
+      assert :already_fresh = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+    end
+
+    test "restore_balance_timestamp/3 re-opens the window after a force claim" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+
+      assert {:claimed, nil, claimed_at} =
+               BalanceRefresh.force_claim_paid_refresh(plaid_item.id)
+
+      assert :ok = BalanceRefresh.restore_balance_timestamp(plaid_item.id, nil, claimed_at)
+
+      reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
+      assert is_nil(reloaded.last_balance_synced_at)
+    end
+  end
+
   describe "stale?/1 and fresh?/1" do
     test "stale?/1 is true for nil and timestamps older than 24 hours" do
       assert BalanceRefresh.stale?(nil)
