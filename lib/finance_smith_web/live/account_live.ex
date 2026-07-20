@@ -56,7 +56,15 @@ defmodule FinanceSmithWeb.AccountLive do
   # --- Balance refresh events -----------------------------------------------
 
   def handle_event("request_balance_refresh", _params, socket) do
-    plaid_item = socket.assigns.plaid_item
+    # Reloads the plaid_item summary before checking freshness — the socket's
+    # copy can be stale (e.g. a background SyncWorker run advanced
+    # last_balance_synced_at while this page was open), which would otherwise
+    # send a force: false request straight into an :already_fresh error
+    # instead of surfacing the cost advisory.
+    user = socket.assigns.current_user
+    account = socket.assigns.account
+    plaid_item = load_plaid_item_summary(user, account)
+    socket = assign(socket, :plaid_item, plaid_item)
 
     cond do
       socket.assigns.balance_refresh_loading ->
@@ -133,16 +141,31 @@ defmodule FinanceSmithWeb.AccountLive do
       "[AccountLive] fetch_realtime_balances failed for plaid_item=#{socket.assigns.plaid_item.id}: #{inspect(reason)}"
     )
 
-    # Surface the Ash-level cause (too fresh, item missing, partial persist,
-    # or Plaid API failure) instead of a single generic message, so users and
-    # tests can distinguish these outcomes rather than seeing them collapsed
-    # into one indistinguishable flash.
+    user = socket.assigns.current_user
+    account_id = socket.assigns.account_id
+    updated_account = load_account(user, account_id)
+    updated_plaid_item = load_plaid_item_summary(user, updated_account)
+
     socket =
       socket
       |> assign(:balance_refresh_loading, false)
-      |> put_flash(:error, AshErrorHTML.format_for_user(reason))
+      |> assign(:account, updated_account)
+      |> assign(:plaid_item, updated_plaid_item)
 
-    {:noreply, socket}
+    if updated_plaid_item && BalanceRefresh.fresh?(updated_plaid_item.last_balance_synced_at) do
+      # The freshly-reloaded item is within the window — this was a stale
+      # force: false request racing a concurrent refresh (e.g. a background
+      # SyncWorker run) that already claimed it, not a real failure. Show
+      # the cost advisory instead of an "already fresh" error so the user
+      # isn't stuck retrying the same rejected request.
+      {:noreply, assign(socket, :show_balance_warning, true)}
+    else
+      # Surface the Ash-level cause (item missing, partial persist, or Plaid
+      # API failure) instead of a single generic message, so users and tests
+      # can distinguish these outcomes rather than seeing them collapsed into
+      # one indistinguishable flash.
+      {:noreply, put_flash(socket, :error, AshErrorHTML.format_for_user(reason))}
+    end
   end
 
   def handle_async(:balance_refresh, {:exit, reason}, socket) do

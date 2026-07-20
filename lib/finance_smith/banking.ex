@@ -27,7 +27,6 @@ defmodule FinanceSmith.Banking do
     resource FinanceSmith.Banking.Account do
       define :get_account_by_id, action: :read_for_ui, get_by: [:id]
       define :list_accounts, action: :read_for_ui
-      define :update_account_balance, action: :update_balance
 
       # :update_cached_balances is intentionally NOT defined here. It is
       # system-only — called by BalanceRefresh and TransactionProcessor via

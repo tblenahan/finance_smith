@@ -508,6 +508,54 @@ defmodule FinanceSmith.Banking.BalanceRefreshTest do
     end
   end
 
+  describe "claim_still_held?/2" do
+    test "returns true immediately after this caller's own successful claim" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+
+      assert {:claimed, _previous, claimed_at} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+      assert BalanceRefresh.claim_still_held?(plaid_item.id, claimed_at)
+    end
+
+    # Regression test for review finding: SyncWorker's claim, cached apply,
+    # and paid fetch are separate steps outside a single lock. If a
+    # concurrent force: true UI refresh claims (and stamps) the window after
+    # this caller's own claim, claim_still_held?/2 must detect that the
+    # timestamp this caller claimed is no longer the current value.
+    test "returns false once the timestamp has moved past this caller's claimed_at" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+
+      assert {:claimed, _previous, claimed_at} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+
+      # Models a concurrent force: true claim landing after this caller's own
+      # claim as a direct write to a later timestamp, rather than a second
+      # DB-generated now() claim — Ecto's SQL sandbox pins now() to the
+      # enclosing test transaction's start for every query in a test, so two
+      # sequential now()-stamped claims within the same test would otherwise
+      # be indistinguishable regardless of real elapsed wall time.
+      later = DateTime.add(claimed_at, 1, :second)
+
+      plaid_item
+      |> Ash.Changeset.for_update(:update, %{}, authorize?: false)
+      |> Ash.Changeset.force_change_attribute(:last_balance_synced_at, later)
+      |> Ash.update!(authorize?: false)
+
+      refute BalanceRefresh.claim_still_held?(plaid_item.id, claimed_at)
+    end
+
+    test "returns false when the PlaidItem was deleted concurrently" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+
+      assert {:claimed, _previous, claimed_at} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+
+      Ash.destroy!(plaid_item, authorize?: false)
+
+      refute BalanceRefresh.claim_still_held?(plaid_item.id, claimed_at)
+    end
+  end
+
   describe "stale?/1 and fresh?/1" do
     test "stale?/1 is true for nil and timestamps older than 24 hours" do
       assert BalanceRefresh.stale?(nil)

@@ -4,9 +4,11 @@ defmodule FinanceSmithWeb.AccountLiveTest do
   import Phoenix.LiveViewTest
   import Mox
 
-  alias FinanceSmith.Banking.{Account, PlaidItem}
+  alias FinanceSmith.Banking
+  alias FinanceSmith.Banking.{Account, BalanceRefresh, PlaidItem}
   alias FinanceSmith.BankingFixtures
   alias FinanceSmith.Identity
+  alias FinanceSmithWeb.AccountLive
 
   setup :verify_on_exit!
 
@@ -290,6 +292,58 @@ defmodule FinanceSmithWeb.AccountLiveTest do
       html = render_async(view)
       assert html =~ "We have a... discrepancy. Some balances could not be persisted."
       refute html =~ "The real-time balance fetch failed."
+    end
+
+    # Regression test for review finding: request_balance_refresh used to
+    # decide freshness from the socket's own (potentially stale) plaid_item
+    # assign. If a concurrent refresh (a background SyncWorker run, another
+    # tab, or another request in flight) claims the 24h window *after* this
+    # socket last loaded plaid_item but *before* the async
+    # fetch_realtime_balances call's own claim runs, the async call
+    # legitimately fails with :already_fresh even though this socket's own
+    # click-time reload saw the item as stale. handle_async/3 must reload
+    # plaid_item and, finding it now fresh, show the cost advisory instead
+    # of flashing the "already fresh" error — otherwise every retry would
+    # repeat the same rejected force: false request forever.
+    #
+    # The race itself isn't reproduced with real timing; instead the real
+    # :already_fresh error is obtained directly (by claiming the window out
+    # of band before calling fetch_realtime_balances/3) and fed into
+    # handle_async/3 with a socket holding the stale pre-claim plaid_item,
+    # exercising the exact reload-and-reclassify path deterministically.
+    test "async :already_fresh error reloads plaid_item and shows the cost advisory instead of an error flash" do
+      user = register_user!()
+      plaid_item = BankingFixtures.create_plaid_item!(user)
+      account = BankingFixtures.create_account!(plaid_item, %{plaid_account_id: "acc_live_race"})
+
+      stale_plaid_item = Banking.get_plaid_item_summary_by_id!(plaid_item.id, actor: user)
+      refute BalanceRefresh.fresh?(stale_plaid_item.last_balance_synced_at)
+
+      assert {:claimed, _previous, _claimed_at} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+
+      assert {:error, reason} =
+               Banking.fetch_realtime_balances(plaid_item.id, %{force: false}, actor: user)
+
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          __changed__: %{},
+          flash: %{},
+          current_user: user,
+          account_id: account.id,
+          account: account,
+          plaid_item: stale_plaid_item,
+          balance_refresh_loading: true,
+          show_balance_warning: false
+        }
+      }
+
+      assert {:noreply, updated_socket} =
+               AccountLive.handle_async(:balance_refresh, {:ok, {:error, reason}}, socket)
+
+      assert updated_socket.assigns.show_balance_warning
+      refute updated_socket.assigns.balance_refresh_loading
+      assert BalanceRefresh.fresh?(updated_socket.assigns.plaid_item.last_balance_synced_at)
+      refute Map.has_key?(updated_socket.assigns.flash, "error")
     end
   end
 end

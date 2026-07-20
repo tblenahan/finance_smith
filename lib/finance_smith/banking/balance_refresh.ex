@@ -50,14 +50,47 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   `:not_found` rather than folded into `:already_fresh`.
 
   Callers that go on to fail (Plaid error or partial persistence failure)
-  must call `restore_balance_timestamp/3` with the `previous` and `claimed_at`
-  values returned by the claim. The restore is a compare-and-swap: it only
-  reverts the timestamp if it still equals `claimed_at`, i.e. nothing else has
-  advanced it since this call claimed the window. This protects against a
-  second scenario: a background claim fails and restores at the same moment a
-  concurrent `force: true` UI refresh has already succeeded and advanced the
-  timestamp again — without the CAS, the restore would silently erase that
-  successful refresh's timestamp.
+  may call `restore_balance_timestamp/3` with the `previous` and `claimed_at`
+  values returned by the claim to re-open the window for a legitimate retry.
+  The restore is a compare-and-swap: it only reverts the timestamp if it
+  still equals `claimed_at`, i.e. nothing else has advanced it since this
+  call claimed the window. This protects against a second scenario: a
+  restore happening at the same moment a concurrent `force: true` UI refresh
+  has already succeeded and advanced the timestamp again — without the CAS,
+  the restore would silently erase that successful refresh's timestamp.
+
+  Restoring is a caller-specific choice, not a universal rule: the
+  actor-facing `FetchRealtimeBalances` path always restores on failure,
+  since a real user is waiting on the outcome and deserves an immediate
+  retry. `SyncWorker`, by contrast, deliberately does **not** restore on a
+  paid-fetch failure — see "SyncWorker does not restore on paid failure"
+  below.
+
+  `claim_still_held?/2` lets a caller re-check, after claiming, whether its
+  claim is still the most recent write to `last_balance_synced_at` — i.e.
+  nothing else (most commonly a concurrent `force_claim_paid_refresh/1`) has
+  advanced the timestamp again since. A caller that has lost ownership this
+  way should skip its remaining work rather than proceed: applying free
+  cached balances after losing ownership could overwrite a fresher paid
+  write that landed in between, and issuing its own paid fetch after losing
+  ownership would spend Plaid quota redundantly. Losing ownership is not a
+  failure of the caller's own claim, so it must not call
+  `restore_balance_timestamp/3` in that case — the row's timestamp already
+  reflects the newer claim's work, not this caller's.
+
+  ## SyncWorker does not restore on paid failure
+
+  Unlike the actor-facing path, `SyncWorker` leaves the claimed window
+  "spent" when its own paid fetch fails (Plaid API error or partial
+  persistence failure) — it does not call `restore_balance_timestamp/3`.
+  Restoring would re-open the window for every subsequent sync run during a
+  sustained outage (e.g. `ITEM_LOGIN_REQUIRED`, or an account that
+  persistently fails to update), causing every periodic sync to re-attempt
+  — and re-bill — the paid call. Leaving the window spent means a broken
+  item is retried at most once per `refresh_interval_hours/0`, with the
+  cached balances from the sync payload already applied as a same-run
+  fallback. A user can still force an immediate retry via `force: true` in
+  the UI, which claims (and, on failure, restores) independently.
 
   ## The `force: true` claim
 
@@ -241,6 +274,31 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
     )
 
     :ok
+  end
+
+  @doc """
+  Returns `true` when `last_balance_synced_at` in the database still equals
+  `claimed_at` — i.e. this caller's claim (from `claim_paid_refresh/1` or
+  `force_claim_paid_refresh/1`) has not been superseded by a newer claim.
+  Returns `false` if it has been superseded, or if the `PlaidItem` was
+  deleted concurrently.
+
+  Intended for callers with multiple steps between claiming and finishing
+  (e.g. applying cached balances, then issuing a paid fetch) that want to
+  re-check ownership before each step rather than only trusting the
+  original claim result. See the "Concurrency — the 24h claim" module
+  section for why losing ownership must not be treated as this caller's own
+  failure.
+  """
+  @spec claim_still_held?(Ecto.UUID.t(), DateTime.t()) :: boolean()
+  def claim_still_held?(plaid_item_id, claimed_at) do
+    case Repo.query!(
+           "SELECT last_balance_synced_at FROM core.plaid_items WHERE id = $1",
+           [Ecto.UUID.dump!(plaid_item_id)]
+         ) do
+      %{rows: [[current]]} -> DateTime.compare(naive_to_utc(current), claimed_at) == :eq
+      %{rows: []} -> false
+    end
   end
 
   @doc """

@@ -62,10 +62,6 @@ defmodule FinanceSmith.Banking.Account do
       change FinanceSmith.Banking.Account.Changes.DetectDuplicateAccount
     end
 
-    update :update_balance do
-      accept [:current_balance, :credit_limit]
-    end
-
     # System-only. Called by both SyncWorker (real-time path) and
     # TransactionProcessor (cached path). Callers use authorize?: false.
     # available_balance may legitimately be nil for certain account types.

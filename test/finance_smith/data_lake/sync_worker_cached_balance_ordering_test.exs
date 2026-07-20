@@ -394,4 +394,84 @@ defmodule FinanceSmith.DataLake.SyncWorkerCachedBalanceOrderingTest do
       assert reloaded.current_balance == 300_000
     end
   end
+
+  # Regression test for review finding: Plaid's /transactions/sync only
+  # includes an account in a page's `accounts` array when that account had
+  # activity on that page — it is not the full account list repeated on
+  # every page. SyncWorker used to pass only the *last* page's `accounts` to
+  # apply_cached_balances_and_maybe_refresh_realtime/2, so an account whose
+  # only activity landed on an earlier page never got its cached balance
+  # applied. SyncWorker now merges accounts by account_id across all pages
+  # before applying cached balances.
+  describe "multi-page sync merges cached balances across pages" do
+    test "accounts appearing on different pages both receive cached balance updates" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account_page1 = create_account!(plaid_item, %{plaid_account_id: "acc_merge_page1"})
+      account_page2 = create_account!(plaid_item, %{plaid_account_id: "acc_merge_page2"})
+      assert is_nil(plaid_item.last_balance_synced_at)
+
+      token = Ash.load!(plaid_item, :access_token, authorize?: false).access_token
+
+      stub(MockPlaid, :sync_transactions, fn
+        %{access_token: ^token, cursor: "cursor_merge_page1"} ->
+          {:ok,
+           %SyncTransactionsResponse{
+             added: [],
+             modified: [],
+             removed: [],
+             next_cursor: "cursor_merge_page2",
+             has_more: false,
+             accounts: [
+               %Plaid.Accounts.Account{
+                 account_id: "acc_merge_page2",
+                 balances: %Plaid.Accounts.Account.Balance{
+                   current: 2500.0,
+                   available: nil,
+                   limit: nil
+                 }
+               }
+             ]
+           }}
+
+        %{access_token: ^token} ->
+          {:ok,
+           %SyncTransactionsResponse{
+             added: [],
+             modified: [],
+             removed: [],
+             next_cursor: "cursor_merge_page1",
+             has_more: true,
+             accounts: [
+               %Plaid.Accounts.Account{
+                 account_id: "acc_merge_page1",
+                 balances: %Plaid.Accounts.Account.Balance{
+                   current: 1500.0,
+                   available: nil,
+                   limit: nil
+                 }
+               }
+             ]
+           }}
+      end)
+
+      # Paid fetch fails — with the "leave claim spent" behavior (see
+      # sync_worker_balance_gating_test.exs), the sync must still succeed and
+      # both pages' cached balances (merged, not just the last page's) must
+      # be applied.
+      expect(MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        {:error, %Plaid.Error{error_code: "INSTITUTION_DOWN"}}
+      end)
+
+      assert :ok = perform_job(SyncWorker, %{"plaid_item_id" => plaid_item.id})
+
+      updated_page1 = Ash.get!(Account, account_page1.id, authorize?: false)
+      updated_page2 = Ash.get!(Account, account_page2.id, authorize?: false)
+      assert updated_page1.current_balance == 150_000
+      assert updated_page2.current_balance == 250_000
+
+      reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
+      refute is_nil(reloaded.last_balance_synced_at)
+    end
+  end
 end
