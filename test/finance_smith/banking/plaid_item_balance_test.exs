@@ -264,6 +264,26 @@ defmodule FinanceSmith.Banking.PlaidItemBalanceTest do
       assert is_nil(reloaded.last_balance_synced_at)
     end
 
+    # Regression test for review finding: claim_paid_refresh/1 used to fold a
+    # missing PlaidItem into :already_fresh. Bypassing the code interface's
+    # get_by read (which would otherwise surface a different, generic
+    # not-found error before our change ever runs) lets this exercise the
+    # :not_found branch inside FetchRealtimeBalances directly.
+    test "surfaces not-found messaging when the item is deleted before the atomic claim runs" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+
+      Ash.destroy!(plaid_item, authorize?: false)
+
+      assert {:error, error} =
+               plaid_item
+               |> Ash.Changeset.for_update(:fetch_realtime_balances, %{}, authorize?: false)
+               |> Ash.update(authorize?: false)
+
+      assert AshErrorHTML.format_for_user(error) =~
+               "We have a... discrepancy. The item could not be located."
+    end
+
     test "rejects refresh when balances are fresh and force is false" do
       user = register_user!()
       plaid_item = create_plaid_item!(user)

@@ -26,6 +26,11 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances do
   bill Plaid — this is an accepted tradeoff of the explicit user
   acknowledgment).
 
+  `claim_paid_refresh/1` returns `:not_found` (rather than `:already_fresh`)
+  when the `PlaidItem` was deleted concurrently between this action's load
+  and the claim — that path surfaces the same not-found error as a missing
+  item during the subsequent token load.
+
   ## Security (AGENT_SECURITY.md rule 6 — permitted access_token load sites)
 
   The `authorize?: false` scope is **strictly limited** to a single
@@ -61,6 +66,9 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances do
                   "We have a... discrepancy. Balances were updated less than #{BalanceRefresh.refresh_interval_hours()} hours ago."
               )
             )
+
+          :not_found ->
+            add_not_found_error(changeset)
 
           {:claimed, previous_last_balance_synced_at, claimed_at} ->
             refresh_claimed_balances(

@@ -138,6 +138,80 @@ defmodule FinanceSmithWeb.AccountLiveTest do
       refute is_nil(reloaded_item.last_balance_synced_at)
     end
 
+    # Regression test: request_balance_refresh used to have no guard against
+    # a second click while balance_refresh_loading was already true. Since
+    # Phoenix.LiveViewTest dispatches the click event directly (bypassing the
+    # rendered `disabled` attribute), this reliably exercises the same
+    # overlap a fast double-click or a cancelled/replaced async task could
+    # cause. Mox's default `expect` (exactly once) fails the test if the
+    # second click starts a second Plaid call.
+    test "ignores a second refresh click while a refresh is already in flight", %{conn: conn} do
+      user = register_user!()
+      plaid_item = BankingFixtures.create_plaid_item!(user)
+
+      account =
+        BankingFixtures.create_account!(plaid_item, %{plaid_account_id: "acc_live_overlap"})
+
+      token = Ash.load!(plaid_item, :access_token, authorize?: false).access_token
+
+      expect(FinanceSmith.Banking.MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        {:ok,
+         %Plaid.Accounts{
+           accounts: [
+             %Plaid.Accounts.Account{
+               account_id: "acc_live_overlap",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 111.0,
+                 available: nil,
+                 limit: nil
+               }
+             }
+           ],
+           item: nil,
+           request_id: "req_live_overlap"
+         }}
+      end)
+
+      {:ok, view, _html} = conn |> log_in_user(user) |> live_account(account.id)
+
+      view |> element("button", "Refresh Balance") |> render_click()
+
+      # The rendered button is now `disabled`, which Phoenix.LiveViewTest's
+      # element-based render_click/1 itself refuses to click — dispatching the
+      # event directly instead simulates a stale/replayed client event (or a
+      # race between two rapid clicks before the disabled attribute reaches
+      # the DOM) landing on the server while still loading.
+      render_click(view, "request_balance_refresh", %{})
+
+      html = render_async(view)
+      assert html =~ "Sync complete. Inevitable."
+
+      updated = Ash.get!(Account, account.id, authorize?: false)
+      assert updated.current_balance == 11_100
+    end
+
+    # Regression test: confirm_balance_refresh used to run unconditionally,
+    # so a stray or replayed "confirm_balance_refresh" event (without the
+    # cost advisory ever being shown) would bypass the advisory and force a
+    # paid refresh. No Plaid mock is stubbed here, so Mox would raise if the
+    # event incorrectly triggered a call.
+    test "confirm_balance_refresh is a no-op when the cost advisory is not shown", %{conn: conn} do
+      user = register_user!()
+      plaid_item = BankingFixtures.create_plaid_item!(user)
+
+      account =
+        BankingFixtures.create_account!(plaid_item, %{plaid_account_id: "acc_live_confirm_noop"})
+
+      {:ok, view, _html} = conn |> log_in_user(user) |> live_account(account.id)
+
+      html = render_click(view, "confirm_balance_refresh", %{})
+
+      refute html =~ "Cost advisory"
+
+      reloaded_item = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
+      assert is_nil(reloaded_item.last_balance_synced_at)
+    end
+
     test "shows error flash when async refresh fails", %{conn: conn} do
       user = register_user!()
       plaid_item = BankingFixtures.create_plaid_item!(user)

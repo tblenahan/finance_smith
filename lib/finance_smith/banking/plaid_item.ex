@@ -71,10 +71,13 @@ defmodule FinanceSmith.Banking.PlaidItem do
       change set_attribute(:last_synced_at, &DateTime.utc_now/0)
     end
 
-    # System-only. Called by SyncWorker (after a real-time Plaid balance fetch)
-    # with authorize?: false. The :fetch_realtime_balances change sets the
-    # timestamp directly via force_change_attribute, so this action is only
-    # called from the background worker path.
+    # System-only test/fixture helper for setting last_balance_synced_at
+    # directly with authorize?: false. Production code never calls this
+    # action: SyncWorker advances the timestamp via the atomic
+    # `BalanceRefresh.claim_paid_refresh/1` SQL claim, and the actor-facing
+    # `:fetch_realtime_balances` change sets it via force_change_attribute on
+    # success. Kept for tests that need to seed a fresh/stale timestamp
+    # without going through either of those paths.
     update :update_balance_timestamp do
       accept []
       change set_attribute(:last_balance_synced_at, &DateTime.utc_now/0)

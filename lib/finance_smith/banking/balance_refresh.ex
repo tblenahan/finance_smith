@@ -36,16 +36,18 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   two browser tabs) could both observe "stale" and both issue a paid Plaid
   call within the same 24h window.
 
-  `claim_paid_refresh/1` closes that gap with a single atomic statement that
-  explicitly locks the target row with `SELECT ... FOR UPDATE` inside the same
-  CTE before checking staleness. This is what makes the claim safe: a
-  concurrent claimant blocks on the row lock (not merely on the `UPDATE`'s
-  implicit lock), and once it acquires the lock it re-runs its *own*
-  `SELECT ... FOR UPDATE` against the now-committed row — so it observes the
-  winner's freshly-set timestamp rather than a frozen pre-lock snapshot. At
-  most one caller receives `{:claimed, _, _}` per window; no lock is held
-  across the subsequent Plaid HTTP call (the transaction implied by the query
-  commits immediately).
+  `claim_paid_refresh/1` closes that gap by running inside a single DB
+  transaction that first locks the target row with `SELECT ... FOR UPDATE`,
+  then checks staleness against the locked value, and only then issues the
+  `UPDATE`. This is what makes the claim safe: a concurrent claimant blocks on
+  the row lock itself (not merely on the `UPDATE`'s implicit lock), and once
+  it acquires the lock its own `SELECT ... FOR UPDATE` re-fetches the
+  now-committed row — so it observes the winner's freshly-set timestamp
+  rather than a frozen pre-lock snapshot. At most one caller receives
+  `{:claimed, _, _}` per window; no lock is held across the subsequent Plaid
+  HTTP call (the transaction commits before `run/1` is invoked). A missing
+  row (the `PlaidItem` was deleted concurrently) is distinguished as
+  `:not_found` rather than folded into `:already_fresh`.
 
   Callers that go on to fail (Plaid error or partial persistence failure)
   must call `restore_balance_timestamp/3` with the `previous` and `claimed_at`
@@ -110,36 +112,52 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   success — the caller must persist both values via
   `restore_balance_timestamp/3` if the subsequent Plaid call or persistence
   fails. Returns `:already_fresh` when another caller already holds the
-  window.
+  window, or `:not_found` when no `PlaidItem` with this id exists (e.g. it
+  was deleted concurrently) — callers must not treat this the same as
+  `:already_fresh`, since no window was ever held.
   """
   @spec claim_paid_refresh(Ecto.UUID.t()) ::
-          {:claimed, DateTime.t() | nil, DateTime.t()} | :already_fresh
+          {:claimed, DateTime.t() | nil, DateTime.t()} | :already_fresh | :not_found
   def claim_paid_refresh(plaid_item_id) do
-    sql = """
-    WITH locked AS (
-      SELECT id, last_balance_synced_at
-      FROM core.plaid_items
-      WHERE id = $1
-      FOR UPDATE
-    )
-    UPDATE core.plaid_items AS pi
-    SET last_balance_synced_at = (now() AT TIME ZONE 'utc')
-    FROM locked
-    WHERE pi.id = locked.id
-      AND (
-        locked.last_balance_synced_at IS NULL
-        OR locked.last_balance_synced_at <= (now() AT TIME ZONE 'utc') - interval '#{@refresh_interval_hours} hours'
-      )
-    RETURNING locked.last_balance_synced_at AS previous, pi.last_balance_synced_at AS claimed
-    """
+    dumped_id = Ecto.UUID.dump!(plaid_item_id)
 
-    case Repo.query!(sql, [Ecto.UUID.dump!(plaid_item_id)]) do
-      %{rows: [[previous, %NaiveDateTime{} = claimed]]} ->
-        {:claimed, naive_to_utc(previous), naive_to_utc(claimed)}
+    {:ok, result} =
+      Repo.transaction(fn ->
+        case Repo.query!(
+               """
+               SELECT last_balance_synced_at
+               FROM core.plaid_items
+               WHERE id = $1
+               FOR UPDATE
+               """,
+               [dumped_id]
+             ) do
+          %{rows: []} ->
+            :not_found
 
-      %{rows: []} ->
-        :already_fresh
-    end
+          %{rows: [[previous]]} ->
+            previous_utc = naive_to_utc(previous)
+
+            if stale?(previous_utc) do
+              %{rows: [[claimed]]} =
+                Repo.query!(
+                  """
+                  UPDATE core.plaid_items
+                  SET last_balance_synced_at = (now() AT TIME ZONE 'utc')
+                  WHERE id = $1
+                  RETURNING last_balance_synced_at
+                  """,
+                  [dumped_id]
+                )
+
+              {:claimed, previous_utc, naive_to_utc(claimed)}
+            else
+              :already_fresh
+            end
+        end
+      end)
+
+    result
   end
 
   @doc """

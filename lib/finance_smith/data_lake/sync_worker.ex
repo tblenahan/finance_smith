@@ -98,27 +98,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
           authorize?: false
         )
 
-      # Apply free cached balances synchronously before the optional paid fetch.
-      # ProcessWorker (async B2 path) skips cached writes to avoid overwriting
-      # fresher paid balances when it finishes after sync completion.
-      # Skip when a recent paid refresh is authoritative (< 24h).
-      #
-      # This re-reads last_balance_synced_at directly (rather than reusing the
-      # `loaded_item` snapshot above) to narrow — but not eliminate — the
-      # check-then-act window against a concurrent force: true UI refresh that
-      # could advance the timestamp between this check and
-      # `apply_cached_balances/2` completing. Closing that window fully would
-      # require locking the row across both the check and every account write
-      # below; given the low impact (a rare, harmless overwrite with slightly
-      # stale free cached values, not a paid double-fetch), that cost isn't
-      # justified here. `maybe_refresh_realtime_balances/1` below performs its
-      # own independent, atomic claim rather than reusing this check (see
-      # `BalanceRefresh.claim_paid_refresh/1`).
-      if BalanceRefresh.stale?(current_last_balance_synced_at!(loaded_item.id)) do
-        TransactionProcessor.apply_cached_balances(loaded_item, payload["accounts"] || [])
-      end
-
-      maybe_refresh_realtime_balances(loaded_item)
+      apply_cached_balances_and_maybe_refresh_realtime(loaded_item, payload["accounts"] || [])
       complete_sync!(loaded_item)
       :ok
     end
@@ -192,20 +172,36 @@ defmodule FinanceSmith.DataLake.SyncWorker do
   end
 
   # Atomically claims the 24h paid-fetch window via
-  # BalanceRefresh.claim_paid_refresh/1 (a FOR UPDATE-locked claim) before
-  # calling Plaid — this closes a check-then-act race where this background
-  # run and a concurrent user-triggered UI refresh could otherwise both
-  # observe "stale" and both issue a paid Plaid call. A failure logs a
-  # warning and restores the previous timestamp (compare-and-swap on
-  # claimed_at, so it won't clobber a concurrent successful refresh) so the
-  # window re-opens for a later retry, but does NOT raise — stale balances
-  # never abort a sync run or trigger Oban retries.
-  defp maybe_refresh_realtime_balances(%PlaidItem{} = plaid_item) do
+  # BalanceRefresh.claim_paid_refresh/1 (a FOR UPDATE-locked claim) *before*
+  # touching balances at all — this closes two races at once:
+  #
+  # 1. This background run and a concurrent user-triggered UI refresh could
+  #    otherwise both observe "stale" and both issue a paid Plaid call.
+  # 2. Applying free cached balances from the sync payload before checking
+  #    staleness could overwrite a fresher paid refresh that completed
+  #    concurrently (e.g. a `force: true` UI refresh) — claiming first and
+  #    only applying cached balances when the claim succeeds means cached
+  #    values are never written after a fresher paid refresh has landed.
+  #
+  # On a successful claim, free cached balances from the sync payload are
+  # applied first, then the paid fetch runs. A paid failure logs a warning
+  # and restores the previous timestamp (compare-and-swap on claimed_at, so
+  # it won't clobber a concurrent successful refresh) so the window re-opens
+  # for a later retry, but does NOT raise — stale balances never abort a
+  # sync run or trigger Oban retries. When the window is already fresh or the
+  # item can no longer be found, neither the cached nor the paid write is
+  # attempted — a fresher value (paid or otherwise) already won.
+  defp apply_cached_balances_and_maybe_refresh_realtime(
+         %PlaidItem{} = plaid_item,
+         payload_accounts
+       ) do
     case BalanceRefresh.claim_paid_refresh(plaid_item.id) do
       {:claimed, previous_last_balance_synced_at, claimed_at} ->
         Logger.info(
-          "[SyncWorker] Balance stale — fetching real-time. plaid_item=#{plaid_item.id}"
+          "[SyncWorker] Balance stale — applying cached and fetching real-time. plaid_item=#{plaid_item.id}"
         )
+
+        TransactionProcessor.apply_cached_balances(plaid_item, payload_accounts)
 
         case BalanceRefresh.run(plaid_item) do
           :ok ->
@@ -225,7 +221,12 @@ defmodule FinanceSmith.DataLake.SyncWorker do
 
       :already_fresh ->
         Logger.debug(
-          "[SyncWorker] Balance fresh (< #{BalanceRefresh.refresh_interval_hours()}h) — skipping paid fetch. plaid_item=#{plaid_item.id}"
+          "[SyncWorker] Balance fresh (< #{BalanceRefresh.refresh_interval_hours()}h) — skipping cached and paid updates. plaid_item=#{plaid_item.id}"
+        )
+
+      :not_found ->
+        Logger.warning(
+          "[SyncWorker] PlaidItem not found while claiming balance refresh window — skipping cached and paid updates. plaid_item=#{plaid_item.id}"
         )
     end
   end
@@ -238,21 +239,6 @@ defmodule FinanceSmith.DataLake.SyncWorker do
     |> case do
       nil -> raise "[SyncWorker] PlaidItem not found: #{id}"
       item -> item
-    end
-  end
-
-  # Minimal point-in-time read of last_balance_synced_at, used immediately
-  # before the cached-balance staleness gate to narrow the check-then-act
-  # window described there — deliberately not the same load as
-  # load_plaid_item!/1, which is fetched earlier in the page loop.
-  defp current_last_balance_synced_at!(plaid_item_id) do
-    Banking.PlaidItem
-    |> Ash.Query.filter(id == ^plaid_item_id)
-    |> Ash.Query.select([:last_balance_synced_at])
-    |> Ash.read_one!(authorize?: false)
-    |> case do
-      nil -> raise "[SyncWorker] PlaidItem not found: #{plaid_item_id}"
-      %Banking.PlaidItem{last_balance_synced_at: last_balance_synced_at} -> last_balance_synced_at
     end
   end
 

@@ -314,6 +314,22 @@ defmodule FinanceSmith.Banking.BalanceRefreshTest do
              ) == :eq
     end
 
+    # Regression test for review finding: an empty RETURNING set was
+    # previously indistinguishable from "not stale" and both mapped to
+    # :already_fresh. A missing PlaidItem (e.g. deleted concurrently) must be
+    # reported as :not_found instead, since no window was ever held for it.
+    test "returns :not_found for a plaid_item_id that does not exist" do
+      assert :not_found = BalanceRefresh.claim_paid_refresh(Ecto.UUID.generate())
+    end
+
+    test "returns :not_found for a plaid_item that has been deleted" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      Ash.destroy!(plaid_item, authorize?: false)
+
+      assert :not_found = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+    end
+
     # Regression test for the check-then-act race that claim_paid_refresh/1
     # closes: a second claim attempt after the first has already committed
     # must observe the winner's freshly-committed timestamp and back off,

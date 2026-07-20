@@ -285,5 +285,34 @@ defmodule FinanceSmith.DataLake.SyncWorkerCachedBalanceOrderingTest do
       reloaded = Ash.get!(Account, account.id, authorize?: false)
       assert reloaded.current_balance == 200_000
     end
+
+    # Regression test for review finding: SyncWorker used to apply free
+    # cached sync-payload balances via a *separate* staleness check from the
+    # paid-fetch claim, so cached balances could still be applied even after
+    # a concurrent force refresh had already claimed the window and
+    # persisted a fresher paid balance. SyncWorker now claims the window
+    # first and only applies cached balances (and attempts a paid fetch) when
+    # it wins that same claim — modeling a concurrent force refresh that
+    # already claimed the window and persisted its paid balance before
+    # SyncWorker's own sync run reaches the balance step.
+    test "cached sync balances are skipped once a concurrent claim has already won the window" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account = create_account!(plaid_item, %{plaid_account_id: "acc_concurrent_claim"})
+      assert is_nil(plaid_item.last_balance_synced_at)
+
+      token = Ash.load!(plaid_item, :access_token, authorize?: false).access_token
+
+      assert {:claimed, nil, _claimed_at} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+      set_account_balance!(account, 900_000)
+
+      stub_sync_with_accounts(token, account.plaid_account_id, 1234.0)
+      expect(MockPlaid, :get_balance, 0, fn _ -> :not_called end)
+
+      assert :ok = perform_job(SyncWorker, %{"plaid_item_id" => plaid_item.id})
+
+      reloaded = Ash.get!(Account, account.id, authorize?: false)
+      assert reloaded.current_balance == 900_000
+    end
   end
 end

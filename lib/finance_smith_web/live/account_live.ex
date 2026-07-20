@@ -58,33 +58,46 @@ defmodule FinanceSmithWeb.AccountLive do
   def handle_event("request_balance_refresh", _params, socket) do
     plaid_item = socket.assigns.plaid_item
 
-    if is_nil(plaid_item) do
-      {:noreply,
-       put_flash(
-         socket,
-         :error,
-         "We have a... discrepancy. No connection found for this account."
-       )}
-    else
-      if BalanceRefresh.fresh?(plaid_item.last_balance_synced_at) do
+    cond do
+      socket.assigns.balance_refresh_loading ->
+        {:noreply, socket}
+
+      is_nil(plaid_item) ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "We have a... discrepancy. No connection found for this account."
+         )}
+
+      BalanceRefresh.fresh?(plaid_item.last_balance_synced_at) ->
         {:noreply, assign(socket, :show_balance_warning, true)}
-      else
+
+      true ->
         {:noreply, perform_balance_refresh(socket, force: false)}
-      end
     end
   end
 
   def handle_event("confirm_balance_refresh", _params, socket) do
-    socket =
-      socket
-      |> assign(:show_balance_warning, false)
-      |> perform_balance_refresh(force: true)
+    if socket.assigns.balance_refresh_loading or not socket.assigns.show_balance_warning or
+         is_nil(socket.assigns.plaid_item) do
+      {:noreply, socket}
+    else
+      socket =
+        socket
+        |> assign(:show_balance_warning, false)
+        |> perform_balance_refresh(force: true)
 
-    {:noreply, socket}
+      {:noreply, socket}
+    end
   end
 
   def handle_event("cancel_balance_refresh", _params, socket) do
-    {:noreply, assign(socket, :show_balance_warning, false)}
+    if socket.assigns.balance_refresh_loading do
+      {:noreply, socket}
+    else
+      {:noreply, assign(socket, :show_balance_warning, false)}
+    end
   end
 
   # --- Transaction PubSub ----------------------------------------------------
@@ -221,10 +234,12 @@ defmodule FinanceSmithWeb.AccountLive do
           <div class="flex items-center gap-3">
             <.button
               phx-click="confirm_balance_refresh"
+              phx-disable-with="Fetching..."
               size="sm"
               color="gray"
               variant="outline"
-              class="font-mono text-xs border-amber-800/50 text-amber-400 hover:border-amber-600 hover:text-amber-300"
+              class="font-mono text-xs border-amber-800/50 text-amber-400 hover:border-amber-600 hover:text-amber-300 disabled:opacity-50"
+              disabled={@balance_refresh_loading}
             >
               Proceed
             </.button>
@@ -233,7 +248,8 @@ defmodule FinanceSmithWeb.AccountLive do
               size="sm"
               color="gray"
               variant="outline"
-              class="font-mono text-xs border-gray-800 text-gray-500 hover:border-gray-600 hover:text-gray-300"
+              class="font-mono text-xs border-gray-800 text-gray-500 hover:border-gray-600 hover:text-gray-300 disabled:opacity-50"
+              disabled={@balance_refresh_loading}
             >
               Cancel
             </.button>
