@@ -211,7 +211,7 @@ defmodule FinanceSmith.Banking.PlaidItemBalanceTest do
                "We have a... discrepancy. The real-time balance fetch failed."
 
       # Timestamp must remain nil — the atomic claim taken before the Plaid
-      # call must have been rolled back via restore_balance_timestamp/2.
+      # call must have been rolled back via restore_balance_timestamp/3.
       reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
       assert is_nil(reloaded.last_balance_synced_at)
     end
@@ -258,7 +258,7 @@ defmodule FinanceSmith.Banking.PlaidItemBalanceTest do
       assert AshErrorHTML.format_for_user(error) ==
                "We have a... discrepancy. Some balances could not be persisted."
 
-      # Timestamp must remain nil — restore_balance_timestamp/2 must have
+      # Timestamp must remain nil — restore_balance_timestamp/3 must have
       # reverted the claim taken before the (partially-failing) Plaid call.
       reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
       assert is_nil(reloaded.last_balance_synced_at)

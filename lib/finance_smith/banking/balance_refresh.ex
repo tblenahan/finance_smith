@@ -36,16 +36,26 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   two browser tabs) could both observe "stale" and both issue a paid Plaid
   call within the same 24h window.
 
-  `claim_paid_refresh/1` closes that gap with a single atomic `UPDATE`
-  statement: it advances `last_balance_synced_at` to now only if the row is
-  currently nil or past the window, and relies on Postgres's normal
-  row-level locking (no explicit `pg_advisory_*` lock, and no lock held across
-  the subsequent Plaid HTTP call) so a concurrent claim on the same row is
-  serialized and re-evaluates the same condition against the just-committed
-  value. Callers that go on to fail (Plaid error or partial persistence
-  failure) must call `restore_balance_timestamp/2` with the previous value
-  returned by the claim, so the window re-opens for a legitimate retry instead
-  of being silently "spent" on a failed attempt.
+  `claim_paid_refresh/1` closes that gap with a single atomic statement that
+  explicitly locks the target row with `SELECT ... FOR UPDATE` inside the same
+  CTE before checking staleness. This is what makes the claim safe: a
+  concurrent claimant blocks on the row lock (not merely on the `UPDATE`'s
+  implicit lock), and once it acquires the lock it re-runs its *own*
+  `SELECT ... FOR UPDATE` against the now-committed row — so it observes the
+  winner's freshly-set timestamp rather than a frozen pre-lock snapshot. At
+  most one caller receives `{:claimed, _, _}` per window; no lock is held
+  across the subsequent Plaid HTTP call (the transaction implied by the query
+  commits immediately).
+
+  Callers that go on to fail (Plaid error or partial persistence failure)
+  must call `restore_balance_timestamp/3` with the `previous` and `claimed_at`
+  values returned by the claim. The restore is a compare-and-swap: it only
+  reverts the timestamp if it still equals `claimed_at`, i.e. nothing else has
+  advanced it since this call claimed the window. This protects against a
+  second scenario: a background claim fails and restores at the same moment a
+  concurrent `force: true` UI refresh has already succeeded and advanced the
+  timestamp again — without the CAS, the restore would silently erase that
+  successful refresh's timestamp.
   """
 
   alias FinanceSmith.Banking.{Account, PlaidBalances, PlaidItem}
@@ -87,40 +97,48 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   Atomically claims the right to perform a paid Plaid balance fetch for the
   `PlaidItem` with the given id.
 
-  Advances `last_balance_synced_at` to now in a single `UPDATE ... WHERE`
-  statement, but only if the current value is `nil` or older than
-  `refresh_interval_hours/0`. Concurrent callers racing on the same row are
-  serialized by Postgres's row lock; the loser's `WHERE` condition is
-  re-evaluated against the winner's just-committed value and correctly
-  observes "not stale", so at most one caller receives `{:claimed, _}` per
-  window.
+  Locks the target row with `SELECT ... FOR UPDATE` before checking
+  staleness, then advances `last_balance_synced_at` to now only if the locked
+  value is `nil` or older than `refresh_interval_hours/0`. A concurrent
+  claimant blocks on the row lock itself (not merely on the `UPDATE`'s
+  implicit target-row lock); once it acquires the lock, `FOR UPDATE`
+  re-fetches the current committed row rather than a pre-lock snapshot, so it
+  correctly observes the winner's just-set timestamp as "not stale". At most
+  one caller receives `{:claimed, _, _}` per window.
 
-  Returns `{:claimed, previous_last_balance_synced_at}` on success — the
-  caller must persist this value via `restore_balance_timestamp/2` if the
-  subsequent Plaid call or persistence fails. Returns `:already_fresh` when
-  another caller already holds the window.
+  Returns `{:claimed, previous_last_balance_synced_at, claimed_at}` on
+  success — the caller must persist both values via
+  `restore_balance_timestamp/3` if the subsequent Plaid call or persistence
+  fails. Returns `:already_fresh` when another caller already holds the
+  window.
   """
-  @spec claim_paid_refresh(Ecto.UUID.t()) :: {:claimed, DateTime.t() | nil} | :already_fresh
+  @spec claim_paid_refresh(Ecto.UUID.t()) ::
+          {:claimed, DateTime.t() | nil, DateTime.t()} | :already_fresh
   def claim_paid_refresh(plaid_item_id) do
     sql = """
-    WITH prior AS (
-      SELECT id, last_balance_synced_at FROM core.plaid_items WHERE id = $1
+    WITH locked AS (
+      SELECT id, last_balance_synced_at
+      FROM core.plaid_items
+      WHERE id = $1
+      FOR UPDATE
     )
     UPDATE core.plaid_items AS pi
     SET last_balance_synced_at = (now() AT TIME ZONE 'utc')
-    FROM prior
-    WHERE pi.id = prior.id
+    FROM locked
+    WHERE pi.id = locked.id
       AND (
-        prior.last_balance_synced_at IS NULL
-        OR prior.last_balance_synced_at <= (now() AT TIME ZONE 'utc') - interval '#{@refresh_interval_hours} hours'
+        locked.last_balance_synced_at IS NULL
+        OR locked.last_balance_synced_at <= (now() AT TIME ZONE 'utc') - interval '#{@refresh_interval_hours} hours'
       )
-    RETURNING prior.last_balance_synced_at
+    RETURNING locked.last_balance_synced_at AS previous, pi.last_balance_synced_at AS claimed
     """
 
     case Repo.query!(sql, [Ecto.UUID.dump!(plaid_item_id)]) do
-      %{rows: [[nil]]} -> {:claimed, nil}
-      %{rows: [[%NaiveDateTime{} = naive]]} -> {:claimed, DateTime.from_naive!(naive, "Etc/UTC")}
-      %{rows: []} -> :already_fresh
+      %{rows: [[previous, %NaiveDateTime{} = claimed]]} ->
+        {:claimed, naive_to_utc(previous), naive_to_utc(claimed)}
+
+      %{rows: []} ->
+        :already_fresh
     end
   end
 
@@ -129,15 +147,27 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   a claimed paid fetch (see `claim_paid_refresh/1`) fails, re-opening the 24h
   window for a legitimate retry instead of leaving it "spent" on a failed
   attempt.
-  """
-  @spec restore_balance_timestamp(Ecto.UUID.t(), DateTime.t() | nil) :: :ok
-  def restore_balance_timestamp(plaid_item_id, previous_last_balance_synced_at) do
-    naive_value =
-      previous_last_balance_synced_at && DateTime.to_naive(previous_last_balance_synced_at)
 
+  This is a compare-and-swap guarded by `claimed_at`: the restore is only
+  applied if `last_balance_synced_at` still equals the value this call
+  claimed. If some other write has advanced it since (e.g. a concurrent
+  `force: true` refresh that succeeded), the restore is a no-op and the newer
+  value is preserved — a blind unconditional restore could otherwise erase a
+  legitimate concurrent success.
+  """
+  @spec restore_balance_timestamp(Ecto.UUID.t(), DateTime.t() | nil, DateTime.t()) :: :ok
+  def restore_balance_timestamp(plaid_item_id, previous_last_balance_synced_at, claimed_at) do
     Repo.query!(
-      "UPDATE core.plaid_items SET last_balance_synced_at = $2 WHERE id = $1",
-      [Ecto.UUID.dump!(plaid_item_id), naive_value]
+      """
+      UPDATE core.plaid_items
+      SET last_balance_synced_at = $2
+      WHERE id = $1 AND last_balance_synced_at = $3
+      """,
+      [
+        Ecto.UUID.dump!(plaid_item_id),
+        previous_last_balance_synced_at && DateTime.to_naive(previous_last_balance_synced_at),
+        DateTime.to_naive(claimed_at)
+      ]
     )
 
     :ok
@@ -192,6 +222,9 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   end
 
   # --- Private helpers --------------------------------------------------------
+
+  defp naive_to_utc(nil), do: nil
+  defp naive_to_utc(%NaiveDateTime{} = naive), do: DateTime.from_naive!(naive, "Etc/UTC")
 
   defp update_account_balance(plaid_account, account_lookup, plaid_item_id) do
     case Map.fetch(account_lookup, plaid_account.account_id) do

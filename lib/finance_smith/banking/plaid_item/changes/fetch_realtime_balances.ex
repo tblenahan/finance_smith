@@ -17,10 +17,14 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances do
   UI refresh (or two browser tabs) could otherwise both observe "stale" and
   both issue a paid Plaid call. If the subsequent Plaid call or persistence
   fails, the previous timestamp is restored via
-  `BalanceRefresh.restore_balance_timestamp/2` so the window re-opens for a
-  legitimate retry. `force: true` intentionally bypasses the claim — the user
-  has already acknowledged the cost advisory in the UI, so there is no window
-  to protect.
+  `BalanceRefresh.restore_balance_timestamp/3`, a compare-and-swap on the
+  claimed timestamp so it won't clobber a concurrent successful refresh, so
+  the window re-opens for a legitimate retry. `force: true` intentionally
+  bypasses the claim — the user has already acknowledged the cost advisory in
+  the UI, so there is no window to protect (though two overlapping forced
+  refreshes, or a forced refresh racing a background claim, can still both
+  bill Plaid — this is an accepted tradeoff of the explicit user
+  acknowledgment).
 
   ## Security (AGENT_SECURITY.md rule 6 — permitted access_token load sites)
 
@@ -58,8 +62,13 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances do
               )
             )
 
-          {:claimed, previous_last_balance_synced_at} ->
-            refresh_claimed_balances(changeset, plaid_item_id, previous_last_balance_synced_at)
+          {:claimed, previous_last_balance_synced_at, claimed_at} ->
+            refresh_claimed_balances(
+              changeset,
+              plaid_item_id,
+              previous_last_balance_synced_at,
+              claimed_at
+            )
         end
       end
     end)
@@ -92,10 +101,20 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances do
   # `change/3`), advancing `last_balance_synced_at` in the DB. Any failure
   # here must restore `previous_last_balance_synced_at` so the window
   # re-opens instead of being silently "spent" on a failed attempt.
-  defp refresh_claimed_balances(changeset, plaid_item_id, previous_last_balance_synced_at) do
+  defp refresh_claimed_balances(
+         changeset,
+         plaid_item_id,
+         previous_last_balance_synced_at,
+         claimed_at
+       ) do
     case load_item_with_token(plaid_item_id) do
       nil ->
-        BalanceRefresh.restore_balance_timestamp(plaid_item_id, previous_last_balance_synced_at)
+        BalanceRefresh.restore_balance_timestamp(
+          plaid_item_id,
+          previous_last_balance_synced_at,
+          claimed_at
+        )
+
         add_not_found_error(changeset)
 
       item ->
@@ -110,7 +129,8 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances do
           {:error, reason} ->
             BalanceRefresh.restore_balance_timestamp(
               plaid_item_id,
-              previous_last_balance_synced_at
+              previous_last_balance_synced_at,
+              claimed_at
             )
 
             add_refresh_error(changeset, plaid_item_id, reason)

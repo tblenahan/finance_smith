@@ -261,17 +261,19 @@ defmodule FinanceSmith.Banking.BalanceRefreshTest do
     end
   end
 
-  describe "claim_paid_refresh/1 and restore_balance_timestamp/2" do
-    test "claims when never synced and returns {:claimed, nil}" do
+  describe "claim_paid_refresh/1 and restore_balance_timestamp/3" do
+    test "claims when never synced and returns {:claimed, nil, claimed_at}" do
       user = register_user!()
       plaid_item = create_plaid_item!(user)
       assert is_nil(plaid_item.last_balance_synced_at)
 
-      assert {:claimed, nil} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+      assert {:claimed, nil, claimed_at} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+      refute is_nil(claimed_at)
 
       reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
       refute is_nil(reloaded.last_balance_synced_at)
       assert BalanceRefresh.fresh?(reloaded.last_balance_synced_at)
+      assert DateTime.diff(reloaded.last_balance_synced_at, claimed_at, :second) == 0
     end
 
     test "claims when stale and returns the previous timestamp" do
@@ -285,8 +287,9 @@ defmodule FinanceSmith.Banking.BalanceRefreshTest do
       |> Ash.Changeset.force_change_attribute(:last_balance_synced_at, stale_ts)
       |> Ash.update!(authorize?: false)
 
-      assert {:claimed, previous} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+      assert {:claimed, previous, claimed_at} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
       assert DateTime.diff(previous, stale_ts, :second) == 0
+      refute is_nil(claimed_at)
 
       reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
       assert BalanceRefresh.fresh?(reloaded.last_balance_synced_at)
@@ -320,24 +323,53 @@ defmodule FinanceSmith.Banking.BalanceRefreshTest do
       user = register_user!()
       plaid_item = create_plaid_item!(user)
 
-      assert {:claimed, nil} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+      assert {:claimed, nil, _claimed_at} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
       assert :already_fresh = BalanceRefresh.claim_paid_refresh(plaid_item.id)
     end
 
-    test "restore_balance_timestamp/2 writes back a nil previous value" do
+    # Regression test for the FOR UPDATE fix (review finding #1): the previous
+    # implementation evaluated staleness against a plain (unlocked) CTE
+    # snapshot, so a second claimant blocked on the UPDATE's implicit lock
+    # could still observe the pre-lock-wait "stale" snapshot once unblocked and
+    # incorrectly succeed too. Locking the row with FOR UPDATE inside the CTE
+    # forces the second claimant to re-fetch the just-committed row on
+    # unblock, so exactly one of two truly concurrent claims must win.
+    test "exactly one of two concurrent claims on the same never-synced item wins" do
       user = register_user!()
       plaid_item = create_plaid_item!(user)
 
-      assert {:claimed, nil} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
-      assert :ok = BalanceRefresh.restore_balance_timestamp(plaid_item.id, nil)
+      parent = self()
+
+      claim = fn ->
+        fn ->
+          Ecto.Adapters.SQL.Sandbox.allow(FinanceSmith.Repo, parent, self())
+          BalanceRefresh.claim_paid_refresh(plaid_item.id)
+        end
+      end
+
+      task1 = Task.async(claim.())
+      task2 = Task.async(claim.())
+
+      results = [Task.await(task1), Task.await(task2)]
+
+      assert Enum.count(results, &match?({:claimed, nil, _claimed_at}, &1)) == 1
+      assert Enum.count(results, &(&1 == :already_fresh)) == 1
+    end
+
+    test "restore_balance_timestamp/3 writes back a nil previous value" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+
+      assert {:claimed, nil, claimed_at} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+      assert :ok = BalanceRefresh.restore_balance_timestamp(plaid_item.id, nil, claimed_at)
 
       reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
       assert is_nil(reloaded.last_balance_synced_at)
       # The window must be open again for a legitimate retry.
-      assert {:claimed, nil} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+      assert {:claimed, nil, _claimed_at} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
     end
 
-    test "restore_balance_timestamp/2 writes back a non-nil previous value" do
+    test "restore_balance_timestamp/3 writes back a non-nil previous value" do
       user = register_user!()
       plaid_item = create_plaid_item!(user)
 
@@ -348,11 +380,39 @@ defmodule FinanceSmith.Banking.BalanceRefreshTest do
       |> Ash.Changeset.force_change_attribute(:last_balance_synced_at, stale_ts)
       |> Ash.update!(authorize?: false)
 
-      assert {:claimed, previous} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
-      assert :ok = BalanceRefresh.restore_balance_timestamp(plaid_item.id, previous)
+      assert {:claimed, previous, claimed_at} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+      assert :ok = BalanceRefresh.restore_balance_timestamp(plaid_item.id, previous, claimed_at)
 
       reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
       assert DateTime.diff(reloaded.last_balance_synced_at, stale_ts, :second) == 0
+    end
+
+    # Regression test for review finding #2: an unconditional restore could
+    # erase a concurrent successful refresh's timestamp. The
+    # compare-and-swap in restore_balance_timestamp/3 must be a no-op once
+    # last_balance_synced_at no longer equals the claimed_at it was given.
+    test "restore_balance_timestamp/3 is a no-op once a newer write has advanced the timestamp" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+
+      assert {:claimed, nil, claimed_at} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+
+      # Simulate a concurrent force-refresh succeeding after this claim, which
+      # advances last_balance_synced_at again to a newer value.
+      newer =
+        plaid_item
+        |> Ash.Changeset.for_update(:update_balance_timestamp, %{}, authorize?: false)
+        |> Ash.update!(authorize?: false)
+
+      refute DateTime.compare(newer.last_balance_synced_at, claimed_at) == :eq
+
+      # Restoring against the stale claimed_at must not clobber the newer value.
+      assert :ok = BalanceRefresh.restore_balance_timestamp(plaid_item.id, nil, claimed_at)
+
+      reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
+
+      assert DateTime.compare(reloaded.last_balance_synced_at, newer.last_balance_synced_at) ==
+               :eq
     end
   end
 
