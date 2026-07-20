@@ -9,6 +9,19 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances do
   On failure, adds an Ash changeset error and does NOT advance the timestamp,
   preventing a silent stale-timestamp update.
 
+  ## Concurrency
+
+  When `force: false` (the default), the 24h window is claimed atomically via
+  `BalanceRefresh.claim_paid_refresh/1` *before* calling Plaid — this closes a
+  check-then-act race where a background `SyncWorker` run and a user-triggered
+  UI refresh (or two browser tabs) could otherwise both observe "stale" and
+  both issue a paid Plaid call. If the subsequent Plaid call or persistence
+  fails, the previous timestamp is restored via
+  `BalanceRefresh.restore_balance_timestamp/2` so the window re-opens for a
+  legitimate retry. `force: true` intentionally bypasses the claim — the user
+  has already acknowledged the cost advisory in the UI, so there is no window
+  to protect.
+
   ## Security (AGENT_SECURITY.md rule 6 — permitted access_token load sites)
 
   The `authorize?: false` scope is **strictly limited** to a single
@@ -32,37 +45,33 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances do
       plaid_item_id = changeset.data.id
       force? = Ash.Changeset.get_argument(changeset, :force)
 
-      if BalanceRefresh.fresh?(changeset.data.last_balance_synced_at) and not force? do
-        Ash.Changeset.add_error(
-          changeset,
-          Ash.Error.Changes.InvalidChanges.exception(
-            message:
-              "We have a... discrepancy. Balances were updated less than #{BalanceRefresh.refresh_interval_hours()} hours ago."
-          )
-        )
-      else
+      if force? do
         refresh_balances(changeset, plaid_item_id)
+      else
+        case BalanceRefresh.claim_paid_refresh(plaid_item_id) do
+          :already_fresh ->
+            Ash.Changeset.add_error(
+              changeset,
+              Ash.Error.Changes.InvalidChanges.exception(
+                message:
+                  "We have a... discrepancy. Balances were updated less than #{BalanceRefresh.refresh_interval_hours()} hours ago."
+              )
+            )
+
+          {:claimed, previous_last_balance_synced_at} ->
+            refresh_claimed_balances(changeset, plaid_item_id, previous_last_balance_synced_at)
+        end
       end
     end)
   end
 
+  # `force: true` path — the caller already acknowledged the cost advisory,
+  # so there is no 24h window to claim/protect. Nothing is persisted until
+  # Plaid succeeds, so there is nothing to restore on failure.
   defp refresh_balances(changeset, plaid_item_id) do
-    # authorize?: false is tightly scoped: single-record load of access_token
-    # + accounts for the Plaid network call only. See module doc / AGENT_SECURITY rule 6.
-    item_with_token =
-      PlaidItem
-      |> Ash.Query.filter(id == ^plaid_item_id)
-      |> Ash.Query.load([:access_token, :accounts])
-      |> Ash.read_one!(authorize?: false)
-
-    case item_with_token do
+    case load_item_with_token(plaid_item_id) do
       nil ->
-        Ash.Changeset.add_error(
-          changeset,
-          Ash.Error.Changes.InvalidChanges.exception(
-            message: "We have a... discrepancy. The item could not be located."
-          )
-        )
+        add_not_found_error(changeset)
 
       item ->
         case BalanceRefresh.run(item) do
@@ -73,30 +82,83 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances do
               DateTime.utc_now()
             )
 
-          {:error, :partial_update} ->
-            Logger.error(
-              "[FetchRealtimeBalances] Partial balance update failure for plaid_item=#{plaid_item_id}"
-            )
+          {:error, reason} ->
+            add_refresh_error(changeset, plaid_item_id, reason)
+        end
+    end
+  end
 
-            Ash.Changeset.add_error(
+  # Non-force path — the 24h window has already been atomically claimed (see
+  # `change/3`), advancing `last_balance_synced_at` in the DB. Any failure
+  # here must restore `previous_last_balance_synced_at` so the window
+  # re-opens instead of being silently "spent" on a failed attempt.
+  defp refresh_claimed_balances(changeset, plaid_item_id, previous_last_balance_synced_at) do
+    case load_item_with_token(plaid_item_id) do
+      nil ->
+        BalanceRefresh.restore_balance_timestamp(plaid_item_id, previous_last_balance_synced_at)
+        add_not_found_error(changeset)
+
+      item ->
+        case BalanceRefresh.run(item) do
+          :ok ->
+            Ash.Changeset.force_change_attribute(
               changeset,
-              Ash.Error.Changes.InvalidChanges.exception(
-                message: "We have a... discrepancy. Some balances could not be persisted."
-              )
+              :last_balance_synced_at,
+              DateTime.utc_now()
             )
 
           {:error, reason} ->
-            Logger.error(
-              "[FetchRealtimeBalances] Plaid balance fetch failed for plaid_item=#{plaid_item_id}: #{inspect(reason)}"
+            BalanceRefresh.restore_balance_timestamp(
+              plaid_item_id,
+              previous_last_balance_synced_at
             )
 
-            Ash.Changeset.add_error(
-              changeset,
-              Ash.Error.Changes.InvalidChanges.exception(
-                message: "We have a... discrepancy. The real-time balance fetch failed."
-              )
-            )
+            add_refresh_error(changeset, plaid_item_id, reason)
         end
     end
+  end
+
+  # authorize?: false is tightly scoped: single-record load of access_token
+  # + accounts for the Plaid network call only. See module doc / AGENT_SECURITY rule 6.
+  defp load_item_with_token(plaid_item_id) do
+    PlaidItem
+    |> Ash.Query.filter(id == ^plaid_item_id)
+    |> Ash.Query.load([:access_token, :accounts])
+    |> Ash.read_one!(authorize?: false)
+  end
+
+  defp add_not_found_error(changeset) do
+    Ash.Changeset.add_error(
+      changeset,
+      Ash.Error.Changes.InvalidChanges.exception(
+        message: "We have a... discrepancy. The item could not be located."
+      )
+    )
+  end
+
+  defp add_refresh_error(changeset, plaid_item_id, :partial_update) do
+    Logger.error(
+      "[FetchRealtimeBalances] Partial balance update failure for plaid_item=#{plaid_item_id}"
+    )
+
+    Ash.Changeset.add_error(
+      changeset,
+      Ash.Error.Changes.InvalidChanges.exception(
+        message: "We have a... discrepancy. Some balances could not be persisted."
+      )
+    )
+  end
+
+  defp add_refresh_error(changeset, plaid_item_id, reason) do
+    Logger.error(
+      "[FetchRealtimeBalances] Plaid balance fetch failed for plaid_item=#{plaid_item_id}: #{inspect(reason)}"
+    )
+
+    Ash.Changeset.add_error(
+      changeset,
+      Ash.Error.Changes.InvalidChanges.exception(
+        message: "We have a... discrepancy. The real-time balance fetch failed."
+      )
+    )
   end
 end

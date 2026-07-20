@@ -4,7 +4,7 @@ defmodule FinanceSmith.Banking.BalanceRefreshTest do
   import Mox
   import FinanceSmith.BankingFixtures
 
-  alias FinanceSmith.Banking.{Account, BalanceRefresh}
+  alias FinanceSmith.Banking.{Account, BalanceRefresh, PlaidItem}
   alias FinanceSmith.Identity
 
   require Ash.Query
@@ -169,7 +169,7 @@ defmodule FinanceSmith.Banking.BalanceRefreshTest do
       assert :ok = BalanceRefresh.run(item)
     end
 
-    test "returns {:error, :partial_update} when a matched account update fails" do
+    test "returns {:error, :partial_update} when a matched account update fails, with the failing account last" do
       user = register_user!()
       plaid_item = create_plaid_item!(user)
       account_ok = create_account!(plaid_item, %{plaid_account_id: "acc_ok"})
@@ -210,6 +210,149 @@ defmodule FinanceSmith.Banking.BalanceRefreshTest do
       updated = Ash.get!(Account, account_ok.id, authorize?: false)
       assert updated.current_balance == 10_000
       assert updated.available_balance == 9000
+    end
+
+    # Regression test for a bug where Enum.any?/2 was used to drive the
+    # per-account update side effects: it short-circuits on the first :error,
+    # so any account listed *after* a failing one was silently never updated.
+    # Here the failing account is deliberately placed FIRST so this test only
+    # passes if every account in the response is actually attempted.
+    test "returns {:error, :partial_update} but still updates accounts listed after the failing one" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account_fail = create_account!(plaid_item, %{plaid_account_id: "acc_fail_first"})
+      account_ok = create_account!(plaid_item, %{plaid_account_id: "acc_ok_second"})
+      item = load_item_with_token_and_accounts!(plaid_item)
+      token = item.access_token
+
+      Ash.destroy!(account_fail, authorize?: false)
+
+      expect(FinanceSmith.Banking.MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        {:ok,
+         %Plaid.Accounts{
+           accounts: [
+             %Plaid.Accounts.Account{
+               account_id: "acc_fail_first",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 200.0,
+                 available: 180.0,
+                 limit: nil
+               }
+             },
+             %Plaid.Accounts.Account{
+               account_id: "acc_ok_second",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 300.0,
+                 available: 270.0,
+                 limit: nil
+               }
+             }
+           ],
+           item: nil,
+           request_id: "req_partial_fail_first"
+         }}
+      end)
+
+      assert {:error, :partial_update} = BalanceRefresh.run(item)
+
+      updated = Ash.get!(Account, account_ok.id, authorize?: false)
+      assert updated.current_balance == 30_000
+      assert updated.available_balance == 27_000
+    end
+  end
+
+  describe "claim_paid_refresh/1 and restore_balance_timestamp/2" do
+    test "claims when never synced and returns {:claimed, nil}" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      assert is_nil(plaid_item.last_balance_synced_at)
+
+      assert {:claimed, nil} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+
+      reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
+      refute is_nil(reloaded.last_balance_synced_at)
+      assert BalanceRefresh.fresh?(reloaded.last_balance_synced_at)
+    end
+
+    test "claims when stale and returns the previous timestamp" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+
+      stale_ts = DateTime.add(DateTime.utc_now(), -(25 * 60 * 60), :second)
+
+      plaid_item
+      |> Ash.Changeset.for_update(:update, %{})
+      |> Ash.Changeset.force_change_attribute(:last_balance_synced_at, stale_ts)
+      |> Ash.update!(authorize?: false)
+
+      assert {:claimed, previous} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+      assert DateTime.diff(previous, stale_ts, :second) == 0
+
+      reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
+      assert BalanceRefresh.fresh?(reloaded.last_balance_synced_at)
+    end
+
+    test "returns :already_fresh and does not mutate the row when within the window" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+
+      fresh_item =
+        plaid_item
+        |> Ash.Changeset.for_update(:update_balance_timestamp, %{}, authorize?: false)
+        |> Ash.update!(authorize?: false)
+
+      assert :already_fresh = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+
+      reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
+
+      assert DateTime.compare(
+               reloaded.last_balance_synced_at,
+               fresh_item.last_balance_synced_at
+             ) == :eq
+    end
+
+    # Regression test for the check-then-act race that claim_paid_refresh/1
+    # closes: a second claim attempt after the first has already committed
+    # must observe the winner's freshly-committed timestamp and back off,
+    # rather than re-reading a stale in-memory snapshot from before the first
+    # claim.
+    test "a second claim attempt after the first commits observes freshness and backs off" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+
+      assert {:claimed, nil} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+      assert :already_fresh = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+    end
+
+    test "restore_balance_timestamp/2 writes back a nil previous value" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+
+      assert {:claimed, nil} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+      assert :ok = BalanceRefresh.restore_balance_timestamp(plaid_item.id, nil)
+
+      reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
+      assert is_nil(reloaded.last_balance_synced_at)
+      # The window must be open again for a legitimate retry.
+      assert {:claimed, nil} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+    end
+
+    test "restore_balance_timestamp/2 writes back a non-nil previous value" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+
+      stale_ts = DateTime.add(DateTime.utc_now(), -(25 * 60 * 60), :second)
+
+      plaid_item
+      |> Ash.Changeset.for_update(:update, %{})
+      |> Ash.Changeset.force_change_attribute(:last_balance_synced_at, stale_ts)
+      |> Ash.update!(authorize?: false)
+
+      assert {:claimed, previous} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+      assert :ok = BalanceRefresh.restore_balance_timestamp(plaid_item.id, previous)
+
+      reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
+      assert DateTime.diff(reloaded.last_balance_synced_at, stale_ts, :second) == 0
     end
   end
 

@@ -27,9 +27,29 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   (either `SyncWorker.load_plaid_item!/1` or `FetchRealtimeBalances`).
   `authorize?: false` on the account writes is intentional — writes are
   system-only per the Account write policy (see `AGENT_SECURITY.md` rule 8).
+
+  ## Concurrency — the 24h claim
+
+  `stale?/1` and `fresh?/1` are pure read-only predicates; checking one and
+  then later calling `run/1` is a check-then-act race; two concurrent callers
+  (e.g. a background `SyncWorker` run racing a user-triggered UI refresh, or
+  two browser tabs) could both observe "stale" and both issue a paid Plaid
+  call within the same 24h window.
+
+  `claim_paid_refresh/1` closes that gap with a single atomic `UPDATE`
+  statement: it advances `last_balance_synced_at` to now only if the row is
+  currently nil or past the window, and relies on Postgres's normal
+  row-level locking (no explicit `pg_advisory_*` lock, and no lock held across
+  the subsequent Plaid HTTP call) so a concurrent claim on the same row is
+  serialized and re-evaluates the same condition against the just-committed
+  value. Callers that go on to fail (Plaid error or partial persistence
+  failure) must call `restore_balance_timestamp/2` with the previous value
+  returned by the claim, so the window re-opens for a legitimate retry instead
+  of being silently "spent" on a failed attempt.
   """
 
   alias FinanceSmith.Banking.{Account, PlaidBalances, PlaidItem}
+  alias FinanceSmith.Repo
 
   require Logger
 
@@ -64,6 +84,66 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   end
 
   @doc """
+  Atomically claims the right to perform a paid Plaid balance fetch for the
+  `PlaidItem` with the given id.
+
+  Advances `last_balance_synced_at` to now in a single `UPDATE ... WHERE`
+  statement, but only if the current value is `nil` or older than
+  `refresh_interval_hours/0`. Concurrent callers racing on the same row are
+  serialized by Postgres's row lock; the loser's `WHERE` condition is
+  re-evaluated against the winner's just-committed value and correctly
+  observes "not stale", so at most one caller receives `{:claimed, _}` per
+  window.
+
+  Returns `{:claimed, previous_last_balance_synced_at}` on success — the
+  caller must persist this value via `restore_balance_timestamp/2` if the
+  subsequent Plaid call or persistence fails. Returns `:already_fresh` when
+  another caller already holds the window.
+  """
+  @spec claim_paid_refresh(Ecto.UUID.t()) :: {:claimed, DateTime.t() | nil} | :already_fresh
+  def claim_paid_refresh(plaid_item_id) do
+    sql = """
+    WITH prior AS (
+      SELECT id, last_balance_synced_at FROM core.plaid_items WHERE id = $1
+    )
+    UPDATE core.plaid_items AS pi
+    SET last_balance_synced_at = (now() AT TIME ZONE 'utc')
+    FROM prior
+    WHERE pi.id = prior.id
+      AND (
+        prior.last_balance_synced_at IS NULL
+        OR prior.last_balance_synced_at <= (now() AT TIME ZONE 'utc') - interval '#{@refresh_interval_hours} hours'
+      )
+    RETURNING prior.last_balance_synced_at
+    """
+
+    case Repo.query!(sql, [Ecto.UUID.dump!(plaid_item_id)]) do
+      %{rows: [[nil]]} -> {:claimed, nil}
+      %{rows: [[%NaiveDateTime{} = naive]]} -> {:claimed, DateTime.from_naive!(naive, "Etc/UTC")}
+      %{rows: []} -> :already_fresh
+    end
+  end
+
+  @doc """
+  Restores `last_balance_synced_at` to `previous_last_balance_synced_at` after
+  a claimed paid fetch (see `claim_paid_refresh/1`) fails, re-opening the 24h
+  window for a legitimate retry instead of leaving it "spent" on a failed
+  attempt.
+  """
+  @spec restore_balance_timestamp(Ecto.UUID.t(), DateTime.t() | nil) :: :ok
+  def restore_balance_timestamp(plaid_item_id, previous_last_balance_synced_at) do
+    naive_value =
+      previous_last_balance_synced_at && DateTime.to_naive(previous_last_balance_synced_at)
+
+    Repo.query!(
+      "UPDATE core.plaid_items SET last_balance_synced_at = $2 WHERE id = $1",
+      [Ecto.UUID.dump!(plaid_item_id), naive_value]
+    )
+
+    :ok
+  end
+
+  @doc """
   Calls Plaid `/accounts/balance/get` using the `access_token` already loaded
   on `plaid_item`, then persists current/available/limit for each matching
   non-duplicate account.
@@ -78,10 +158,15 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
       {:ok, %{accounts: plaid_accounts}} ->
         account_lookup = Map.new(accounts, fn a -> {a.plaid_account_id, a} end)
 
-        failed? =
-          Enum.any?(plaid_accounts, fn plaid_account ->
-            update_account_balance(plaid_account, account_lookup, plaid_item.id) == :error
+        # Enum.map/2 ensures every account is attempted even if an earlier one
+        # fails to persist — Enum.any?/2 would short-circuit on the first
+        # :error and silently skip the remaining accounts.
+        results =
+          Enum.map(plaid_accounts, fn plaid_account ->
+            update_account_balance(plaid_account, account_lookup, plaid_item.id)
           end)
+
+        failed? = Enum.any?(results, &(&1 == :error))
 
         if failed? do
           Logger.warning(

@@ -5,6 +5,7 @@ defmodule FinanceSmithWeb.AccountLive do
 
   alias FinanceSmith.Banking
   alias FinanceSmith.Banking.BalanceRefresh
+  alias FinanceSmithWeb.AshErrorHTML
   alias FinanceSmithWeb.MoneyFormat
   alias FinanceSmithWeb.TransactionLiveHelpers
   alias FinanceSmithWeb.TransactionTableComponent
@@ -119,13 +120,14 @@ defmodule FinanceSmithWeb.AccountLive do
       "[AccountLive] fetch_realtime_balances failed for plaid_item=#{socket.assigns.plaid_item.id}: #{inspect(reason)}"
     )
 
+    # Surface the Ash-level cause (too fresh, item missing, partial persist,
+    # or Plaid API failure) instead of a single generic message, so users and
+    # tests can distinguish these outcomes rather than seeing them collapsed
+    # into one indistinguishable flash.
     socket =
       socket
       |> assign(:balance_refresh_loading, false)
-      |> put_flash(
-        :error,
-        "We have a... discrepancy. The real-time balance fetch failed."
-      )
+      |> put_flash(:error, AshErrorHTML.format_for_user(reason))
 
     {:noreply, socket}
   end
@@ -135,6 +137,8 @@ defmodule FinanceSmithWeb.AccountLive do
       "[AccountLive] balance refresh task exited for plaid_item=#{socket.assigns.plaid_item.id}: #{inspect(reason)}"
     )
 
+    # A process crash carries no Ash error to format, so this keeps the
+    # generic fallback message.
     socket =
       socket
       |> assign(:balance_refresh_loading, false)

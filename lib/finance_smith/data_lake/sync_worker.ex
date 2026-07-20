@@ -101,7 +101,10 @@ defmodule FinanceSmith.DataLake.SyncWorker do
       # Apply free cached balances synchronously before the optional paid fetch.
       # ProcessWorker (async B2 path) skips cached writes to avoid overwriting
       # fresher paid balances when it finishes after sync completion.
-      # Skip when a recent paid refresh is authoritative (< 24h).
+      # Skip when a recent paid refresh is authoritative (< 24h). This is the
+      # only staleness check in this function — maybe_refresh_realtime_balances/1
+      # below performs its own independent, atomic claim rather than
+      # re-checking this same in-memory snapshot (see BalanceRefresh.claim_paid_refresh/1).
       if BalanceRefresh.stale?(loaded_item.last_balance_synced_at) do
         TransactionProcessor.apply_cached_balances(loaded_item, payload["accounts"] || [])
       end
@@ -179,34 +182,41 @@ defmodule FinanceSmith.DataLake.SyncWorker do
     |> Ash.update!(authorize?: false)
   end
 
-  # Calls BalanceRefresh.run/1 only when last_balance_synced_at is nil (never
-  # fetched) or older than 24 hours. A failure logs a warning but does NOT raise
-  # so that stale balances never abort a sync run or trigger Oban retries.
-  # On success, bumps last_balance_synced_at via :update_balance_timestamp.
+  # Atomically claims the 24h paid-fetch window via
+  # BalanceRefresh.claim_paid_refresh/1 (a single UPDATE ... WHERE statement)
+  # before calling Plaid — this closes a check-then-act race where this
+  # background run and a concurrent user-triggered UI refresh could otherwise
+  # both observe "stale" and both issue a paid Plaid call. A failure logs a
+  # warning and restores the previous timestamp so the window re-opens for a
+  # later retry, but does NOT raise — stale balances never abort a sync run
+  # or trigger Oban retries.
   defp maybe_refresh_realtime_balances(%PlaidItem{} = plaid_item) do
-    if BalanceRefresh.stale?(plaid_item.last_balance_synced_at) do
-      Logger.info("[SyncWorker] Balance stale — fetching real-time. plaid_item=#{plaid_item.id}")
+    case BalanceRefresh.claim_paid_refresh(plaid_item.id) do
+      {:claimed, previous_last_balance_synced_at} ->
+        Logger.info(
+          "[SyncWorker] Balance stale — fetching real-time. plaid_item=#{plaid_item.id}"
+        )
 
-      case BalanceRefresh.run(plaid_item) do
-        :ok ->
-          update_balance_timestamp!(plaid_item)
+        case BalanceRefresh.run(plaid_item) do
+          :ok ->
+            :ok
 
-        {:error, reason} ->
-          Logger.warning(
-            "[SyncWorker] Real-time balance fetch failed — sync still complete. plaid_item=#{plaid_item.id} reason=#{inspect(reason)}"
-          )
-      end
-    else
-      Logger.debug(
-        "[SyncWorker] Balance fresh (< #{BalanceRefresh.refresh_interval_hours()}h) — skipping paid fetch. plaid_item=#{plaid_item.id}"
-      )
+          {:error, reason} ->
+            Logger.warning(
+              "[SyncWorker] Real-time balance fetch failed — sync still complete. plaid_item=#{plaid_item.id} reason=#{inspect(reason)}"
+            )
+
+            BalanceRefresh.restore_balance_timestamp(
+              plaid_item.id,
+              previous_last_balance_synced_at
+            )
+        end
+
+      :already_fresh ->
+        Logger.debug(
+          "[SyncWorker] Balance fresh (< #{BalanceRefresh.refresh_interval_hours()}h) — skipping paid fetch. plaid_item=#{plaid_item.id}"
+        )
     end
-  end
-
-  defp update_balance_timestamp!(plaid_item) do
-    plaid_item
-    |> Ash.Changeset.for_update(:update_balance_timestamp, %{}, authorize?: false)
-    |> Ash.update!(authorize?: false)
   end
 
   defp load_plaid_item!(id) do

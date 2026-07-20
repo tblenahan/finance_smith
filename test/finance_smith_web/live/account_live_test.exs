@@ -156,5 +156,66 @@ defmodule FinanceSmithWeb.AccountLiveTest do
       assert html =~ "We have a... discrepancy. The real-time balance fetch failed."
       refute html =~ "pc-button--disabled"
     end
+
+    # Regression test: the async error handler used to flash the same generic
+    # string for every failure cause. It now surfaces the Ash-level message
+    # via AshErrorHTML.format_for_user/1, so a partial persistence failure
+    # must read differently from a plain Plaid API failure (asserted above).
+    test "shows a distinct flash for a partial balance persistence failure", %{conn: conn} do
+      user = register_user!()
+      plaid_item = BankingFixtures.create_plaid_item!(user)
+
+      account =
+        BankingFixtures.create_account!(plaid_item, %{plaid_account_id: "acc_live_partial_ok"})
+
+      account_fail =
+        BankingFixtures.create_account!(plaid_item, %{
+          plaid_account_id: "acc_live_partial_fail"
+        })
+
+      token = Ash.load!(plaid_item, :access_token, authorize?: false).access_token
+
+      expect(FinanceSmith.Banking.MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        # Destroying inside the mock (rather than before it) is deliberate:
+        # BalanceRefresh.run/1 builds its account_lookup from the accounts
+        # already loaded on the PlaidItem *before* calling Plaid, so this
+        # simulates the account disappearing mid-flight (a genuine matched
+        # update failure) rather than "unknown account" (which would be
+        # silently skipped, not counted as a failure).
+        Ash.destroy!(account_fail, authorize?: false)
+
+        {:ok,
+         %Plaid.Accounts{
+           accounts: [
+             %Plaid.Accounts.Account{
+               account_id: "acc_live_partial_ok",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 100.0,
+                 available: nil,
+                 limit: nil
+               }
+             },
+             %Plaid.Accounts.Account{
+               account_id: "acc_live_partial_fail",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 200.0,
+                 available: nil,
+                 limit: nil
+               }
+             }
+           ],
+           item: nil,
+           request_id: "req_live_partial"
+         }}
+      end)
+
+      {:ok, view, _html} = conn |> log_in_user(user) |> live_account(account.id)
+
+      view |> element("button", "Refresh Balance") |> render_click()
+
+      html = render_async(view)
+      assert html =~ "We have a... discrepancy. Some balances could not be persisted."
+      refute html =~ "The real-time balance fetch failed."
+    end
   end
 end

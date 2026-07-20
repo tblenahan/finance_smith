@@ -12,6 +12,7 @@ defmodule FinanceSmith.Banking.PlaidItemBalanceTest do
   alias FinanceSmith.Banking
   alias FinanceSmith.Banking.{BalanceRefresh, PlaidItem}
   alias FinanceSmith.Identity
+  alias FinanceSmithWeb.AshErrorHTML
 
   require Ash.Query
 
@@ -204,9 +205,13 @@ defmodule FinanceSmith.Banking.PlaidItemBalanceTest do
         {:error, %Plaid.Error{error_code: "ITEM_LOGIN_REQUIRED"}}
       end)
 
-      assert {:error, _} = Banking.fetch_realtime_balances(plaid_item.id, actor: user)
+      assert {:error, error} = Banking.fetch_realtime_balances(plaid_item.id, actor: user)
 
-      # Timestamp must remain nil
+      assert AshErrorHTML.format_for_user(error) ==
+               "We have a... discrepancy. The real-time balance fetch failed."
+
+      # Timestamp must remain nil — the atomic claim taken before the Plaid
+      # call must have been rolled back via restore_balance_timestamp/2.
       reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
       assert is_nil(reloaded.last_balance_synced_at)
     end
@@ -214,7 +219,7 @@ defmodule FinanceSmith.Banking.PlaidItemBalanceTest do
     test "does not advance timestamp when BalanceRefresh returns partial_update" do
       user = register_user!()
       plaid_item = create_plaid_item!(user)
-      account_ok = create_account!(plaid_item, %{plaid_account_id: "acc_action_partial_ok"})
+      _account_ok = create_account!(plaid_item, %{plaid_account_id: "acc_action_partial_ok"})
       account_fail = create_account!(plaid_item, %{plaid_account_id: "acc_action_partial_fail"})
       assert is_nil(plaid_item.last_balance_synced_at)
 
@@ -248,8 +253,13 @@ defmodule FinanceSmith.Banking.PlaidItemBalanceTest do
          }}
       end)
 
-      assert {:error, _} = Banking.fetch_realtime_balances(plaid_item.id, actor: user)
+      assert {:error, error} = Banking.fetch_realtime_balances(plaid_item.id, actor: user)
 
+      assert AshErrorHTML.format_for_user(error) ==
+               "We have a... discrepancy. Some balances could not be persisted."
+
+      # Timestamp must remain nil — restore_balance_timestamp/2 must have
+      # reverted the claim taken before the (partially-failing) Plaid call.
       reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
       assert is_nil(reloaded.last_balance_synced_at)
     end
@@ -266,9 +276,14 @@ defmodule FinanceSmith.Banking.PlaidItemBalanceTest do
 
       assert BalanceRefresh.fresh?(fresh_item.last_balance_synced_at)
 
-      assert {:error, _} =
+      assert {:error, error} =
                Banking.fetch_realtime_balances(plaid_item.id, %{force: false}, actor: user)
 
+      assert AshErrorHTML.format_for_user(error) =~
+               "Balances were updated less than #{BalanceRefresh.refresh_interval_hours()} hours ago."
+
+      # Rejected as :already_fresh — no claim should have been taken, so the
+      # row must be untouched (not just restored to the same value).
       reloaded = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
 
       assert DateTime.compare(reloaded.last_balance_synced_at, fresh_item.last_balance_synced_at) ==
