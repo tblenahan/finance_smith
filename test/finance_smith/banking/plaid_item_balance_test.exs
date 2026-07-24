@@ -300,7 +300,7 @@ defmodule FinanceSmith.Banking.PlaidItemBalanceTest do
                Banking.fetch_realtime_balances(plaid_item.id, %{force: false}, actor: user)
 
       assert AshErrorHTML.format_for_user(error) =~
-               "A paid balance-refresh window was claimed less than #{BalanceRefresh.refresh_interval_hours()} hours ago."
+               "A balance refresh window was opened less than #{BalanceRefresh.refresh_interval_hours()} hours ago."
 
       # Rejected as :already_fresh — no claim should have been taken, so the
       # row must be untouched (not just restored to the same value).

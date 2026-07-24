@@ -232,14 +232,14 @@ defmodule FinanceSmithWeb.AccountLive do
               size="sm"
               color="gray"
               variant="outline"
-              class="font-mono text-xs border-gray-800 text-gray-400 hover:border-emerald-500/50 hover:text-emerald-400 disabled:opacity-50"
+              class="font-mono text-xs border-gray-800 text-gray-400 hover:border-gray-600 hover:text-gray-200 disabled:opacity-50"
               disabled={@balance_refresh_loading}
             >
               Refresh Balance
             </.button>
             <%= if @plaid_item.last_balance_synced_at do %>
               <p class="font-mono text-[10px] text-gray-600 uppercase tracking-widest">
-                Last balance refresh claimed: {format_datetime(@plaid_item.last_balance_synced_at)}
+                Balance refresh window: {format_datetime(@plaid_item.last_balance_synced_at)}
               </p>
             <% end %>
           </div>
@@ -253,7 +253,7 @@ defmodule FinanceSmithWeb.AccountLive do
             Cost advisory
           </p>
           <p class="text-sm text-gray-300">
-            A paid balance-refresh window was claimed less than {@balance_fresh_hours} hours ago.
+            A balance refresh window was opened less than {@balance_fresh_hours} hours ago.
             Requesting another real-time update now will incur additional API charges. Proceed?
           </p>
           <div class="flex items-center gap-3">

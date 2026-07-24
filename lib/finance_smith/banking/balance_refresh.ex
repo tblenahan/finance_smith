@@ -31,7 +31,7 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   ## Concurrency — the 24h claim
 
   `stale?/1` and `fresh?/1` are pure read-only predicates; checking one and
-  then later calling `run/1` is a check-then-act race; two concurrent callers
+  then later calling `run/2` is a check-then-act race; two concurrent callers
   (e.g. a background `SyncWorker` run racing a user-triggered UI refresh, or
   two browser tabs) could both observe "stale" and both issue a paid Plaid
   call within the same 24h window.
@@ -45,7 +45,7 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   now-committed row — so it observes the winner's freshly-set timestamp
   rather than a frozen pre-lock snapshot. At most one caller receives
   `{:claimed, _, _}` per window; no lock is held across the subsequent Plaid
-  HTTP call (the transaction commits before `run/1` is invoked). A missing
+  HTTP call (the transaction commits before `run/2` is invoked). A missing
   row (the `PlaidItem` was deleted concurrently) is distinguished as
   `:not_found` rather than folded into `:already_fresh`.
 
@@ -80,9 +80,24 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
 
   `SyncWorker` issues the paid fetch first after winning a claim, and only
   applies free cached sync-payload balances as a same-run fallback when that
-  paid fetch fails *and* `claim_still_held?/2` is still true. That ordering
-  prevents an older cached write from clobbering a concurrent force refresh's
-  paid balances when the background claim is superseded mid-flight.
+  paid fetch fails entirely *and* `claim_still_held?/2` is still true. It
+  does not apply cached balances on `{:error, :partial_update}` (successful
+  paid rows must not be overwritten by older sync-payload values) or when
+  the claim has been superseded. That ordering prevents an older cached or
+  paid write from clobbering a concurrent force refresh's fresher balances.
+
+  Callers that pass `claimed_at:` into `run/2` re-check ownership *after*
+  Plaid returns and *before* persisting. If the claim was superseded
+  mid-flight (e.g. a concurrent `force_claim_paid_refresh/1`), `run/2`
+  returns `{:error, :claim_superseded}` without writing — so an older paid
+  payload cannot overwrite fresher balances that landed during the RTT.
+
+  Ownership is timestamp equality on `last_balance_synced_at`. Same-tick
+  PostgreSQL `now()` collisions between two claims are rare in production
+  but make supersession undetectable; tests that simulate concurrency bump
+  the stamp by ≥1s so ownership is unambiguous. An opaque claim-id column
+  would close that residual; it is deferred while overlapping paid RTTs
+  remain an accepted tradeoff.
 
   ## SyncWorker does not restore on paid failure
 
@@ -94,10 +109,10 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   persistently fails to update), causing every periodic sync to re-attempt
   — and re-bill — the paid call. Leaving the window spent means a broken
   item is retried at most once per `refresh_interval_hours/0`, with the
-  cached balances from the sync payload applied as a same-run fallback when
-  the claim is still held. A user can still force an immediate retry via
-  `force: true` in the UI, which claims (and, on failure, restores)
-  independently.
+  cached balances from the sync payload applied as a same-run fallback only
+  on a full paid-fetch failure when the claim is still held. A user can
+  still force an immediate retry via `force: true` in the UI, which claims
+  (and, on failure, restores) independently.
 
   ## The `force: true` claim
 
@@ -113,9 +128,10 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   still observe a stale/nil timestamp for the full duration of the force
   call's Plaid round-trip, claim the window itself, and later apply free
   cached balances that could land after the force call's fresher paid
-  balances. Once the force claim's transaction commits, any concurrent
-  `claim_paid_refresh/1` immediately observes the just-set timestamp as
-  fresh and skips both the paid fetch and any cached fallback.
+  balances. Once the force claim's transaction commits *before*
+  SyncWorker has claimed, any concurrent `claim_paid_refresh/1`
+  immediately observes the just-set timestamp as fresh and skips both the
+  paid fetch and any cached fallback (`:already_fresh`).
 
   This does not fully serialize overlapping Plaid round-trips — only the
   claim step is transactional, so a background claim that wins the row lock
@@ -123,11 +139,11 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   concurrently with the force call. Two overlapping `force: true` calls, or a
   forced refresh racing a background claim that already won, can still both
   bill Plaid — this remains an accepted tradeoff of the explicit user
-  acknowledgment (see `FetchRealtimeBalances` moduledoc). After the
-  paid-first reorder, SyncWorker will not apply cached balances once its
-  claim has been superseded, so a concurrent force's paid write is no longer
-  at risk of being overwritten by older sync-payload cached values from the
-  background run.
+  acknowledgment (see `FetchRealtimeBalances` moduledoc). When SyncWorker
+  already holds the claim and force supersedes mid-`get_balance`, SyncWorker
+  (and any `run/2` caller that passes `claimed_at:`) discards the older paid
+  response without writing and skips cached fallback, so the force path's
+  fresher balances are not overwritten by the background run.
   """
 
   alias FinanceSmith.Banking.{Account, PlaidBalances, PlaidItem}
@@ -316,39 +332,26 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
   on `plaid_item`, then persists current/available/limit for each matching
   non-duplicate account.
 
-  Returns `:ok` when all matched account updates succeed, `{:error, :partial_update}`
-  when any matched non-duplicate account fails to persist, or `{:error, reason}`
-  if the Plaid API call fails.
+  Options:
+
+  - `:claimed_at` — when set, re-checks `claim_still_held?/2` after Plaid
+    returns and before any account write. If the claim was superseded
+    mid-flight, returns `{:error, :claim_superseded}` without persisting so
+    an older paid payload cannot overwrite fresher concurrent balances.
+
+  Returns `:ok` when all matched account updates succeed,
+  `{:error, :partial_update}` when any matched non-duplicate account fails
+  to persist, `{:error, :claim_superseded}` when `:claimed_at` was provided
+  and ownership was lost before persist, or `{:error, reason}` if the Plaid
+  API call fails.
   """
-  @spec run(PlaidItem.t()) :: :ok | {:error, term()}
-  def run(%PlaidItem{access_token: token, accounts: accounts} = plaid_item) do
-    case plaid_client().get_balance(%{access_token: token}) do
+  @spec run(PlaidItem.t(), keyword()) :: :ok | {:error, term()}
+  def run(%PlaidItem{} = plaid_item, opts \\ []) do
+    claimed_at = Keyword.get(opts, :claimed_at)
+
+    case plaid_client().get_balance(%{access_token: plaid_item.access_token}) do
       {:ok, %{accounts: plaid_accounts}} ->
-        account_lookup = Map.new(accounts, fn a -> {a.plaid_account_id, a} end)
-
-        # Enum.map/2 ensures every account is attempted even if an earlier one
-        # fails to persist — Enum.any?/2 would short-circuit on the first
-        # :error and silently skip the remaining accounts.
-        results =
-          Enum.map(plaid_accounts, fn plaid_account ->
-            update_account_balance(plaid_account, account_lookup, plaid_item.id)
-          end)
-
-        failed? = Enum.any?(results, &(&1 == :error))
-
-        if failed? do
-          Logger.warning(
-            "[BalanceRefresh] Partial balance update failure. plaid_item=#{plaid_item.id} accounts=#{length(plaid_accounts)}"
-          )
-
-          {:error, :partial_update}
-        else
-          Logger.info(
-            "[BalanceRefresh] Balances refreshed. plaid_item=#{plaid_item.id} accounts=#{length(plaid_accounts)}"
-          )
-
-          :ok
-        end
+        persist_paid_balances(plaid_item, plaid_accounts, claimed_at)
 
       {:error, reason} ->
         Logger.warning(
@@ -356,6 +359,46 @@ defmodule FinanceSmith.Banking.BalanceRefresh do
         )
 
         {:error, reason}
+    end
+  end
+
+  defp persist_paid_balances(
+         %PlaidItem{accounts: accounts} = plaid_item,
+         plaid_accounts,
+         claimed_at
+       ) do
+    if is_nil(claimed_at) or claim_still_held?(plaid_item.id, claimed_at) do
+      account_lookup = Map.new(accounts, fn a -> {a.plaid_account_id, a} end)
+
+      # Enum.map/2 ensures every account is attempted even if an earlier one
+      # fails to persist — Enum.any?/2 would short-circuit on the first
+      # :error and silently skip the remaining accounts.
+      results =
+        Enum.map(plaid_accounts, fn plaid_account ->
+          update_account_balance(plaid_account, account_lookup, plaid_item.id)
+        end)
+
+      failed? = Enum.any?(results, &(&1 == :error))
+
+      if failed? do
+        Logger.warning(
+          "[BalanceRefresh] Partial balance update failure. plaid_item=#{plaid_item.id} accounts=#{length(plaid_accounts)}"
+        )
+
+        {:error, :partial_update}
+      else
+        Logger.info(
+          "[BalanceRefresh] Balances refreshed. plaid_item=#{plaid_item.id} accounts=#{length(plaid_accounts)}"
+        )
+
+        :ok
+      end
+    else
+      Logger.info(
+        "[BalanceRefresh] Claim superseded before paid persist — discarding paid payload. plaid_item=#{plaid_item.id}"
+      )
+
+      {:error, :claim_superseded}
     end
   end
 

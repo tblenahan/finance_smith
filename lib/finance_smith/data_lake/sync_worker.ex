@@ -201,26 +201,30 @@ defmodule FinanceSmith.DataLake.SyncWorker do
   #    otherwise both observe "stale" and both issue a paid Plaid call.
   # 2. Applying free cached balances from the sync payload without winning
   #    that claim could overwrite a fresher paid refresh that completed
-  #    concurrently (e.g. a `force: true` UI refresh). A `force: true` UI
-  #    refresh also claims (and stamps `last_balance_synced_at`) via
-  #    BalanceRefresh.force_claim_paid_refresh/1 *before* it calls Plaid — see
-  #    BalanceRefresh's "The `force: true` claim" moduledoc section — so once
-  #    that claim commits, this claim sees a fresh timestamp and skips both
-  #    the paid fetch and any cached fallback entirely.
+  #    concurrently (e.g. a `force: true` UI refresh).
+  #
+  # Force-claim ordering (see BalanceRefresh "The `force: true` claim"):
+  # - If `force_claim_paid_refresh/1` commits *before* this claim, this run
+  #   gets `:already_fresh` and skips paid + cached entirely.
+  # - If this run already holds the claim and force supersedes mid-
+  #   `get_balance`, `BalanceRefresh.run/2` (with `claimed_at:`) discards
+  #   the older paid payload without writing (`:claim_superseded`); cached
+  #   fallback is also skipped. Overlapping paid RTTs / double-bill remain
+  #   an accepted tradeoff.
   #
   # After winning the claim, this run issues the paid fetch first. Free
   # cached balances from the sync payload are applied only as a same-run
-  # fallback when the paid fetch fails *and* the claim is still held —
-  # never before the paid attempt. That ordering closes the residual race
-  # where a concurrent force refresh could land fresher paid balances while
-  # this run was still applying older cached values, then skip its own paid
-  # fetch after noticing the claim was superseded.
+  # fallback when the paid fetch fails entirely *and* the claim is still
+  # held — never before the paid attempt, and never on
+  # `{:error, :partial_update}` (successful paid rows must not be replaced
+  # by older sync-payload values).
   #
   # BalanceRefresh.claim_still_held?/2 re-checks ownership before the paid
-  # fetch and again before any cached fallback, and skips the remaining
-  # work — without restoring — if a newer claim has already superseded this
-  # one; see BalanceRefresh moduledoc for why proceeding after losing
-  # ownership, or restoring in that case, would be wrong.
+  # fetch, again inside `run/2` before persist, and again before any cached
+  # fallback, and skips the remaining work — without restoring — if a newer
+  # claim has already superseded this one; see BalanceRefresh moduledoc for
+  # why proceeding after losing ownership, or restoring in that case, would
+  # be wrong.
   #
   # A paid-fetch failure (Plaid API error or partial persistence failure)
   # logs a warning but does NOT raise (stale balances never abort a sync run
@@ -254,12 +258,22 @@ defmodule FinanceSmith.DataLake.SyncWorker do
   defp apply_claimed_balances(%PlaidItem{} = plaid_item, payload_accounts, claimed_at) do
     if BalanceRefresh.claim_still_held?(plaid_item.id, claimed_at) do
       Logger.info(
-        "[SyncWorker] Balance stale — fetching real-time (cached fallback only on paid failure). plaid_item=#{plaid_item.id}"
+        "[SyncWorker] Balance stale — fetching real-time (cached fallback only on full paid failure). plaid_item=#{plaid_item.id}"
       )
 
-      case BalanceRefresh.run(plaid_item) do
+      case BalanceRefresh.run(plaid_item, claimed_at: claimed_at) do
         :ok ->
           :ok
+
+        {:error, :claim_superseded} ->
+          Logger.info(
+            "[SyncWorker] Claim superseded during paid fetch — discarding paid payload and skipping cached fallback. plaid_item=#{plaid_item.id}"
+          )
+
+        {:error, :partial_update} ->
+          Logger.warning(
+            "[SyncWorker] Partial paid balance persist — sync still complete, leaving the 24h window spent; skipping cached fallback so successful paid rows stay. plaid_item=#{plaid_item.id}"
+          )
 
         {:error, reason} ->
           Logger.warning(

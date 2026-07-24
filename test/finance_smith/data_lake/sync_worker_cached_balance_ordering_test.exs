@@ -438,6 +438,132 @@ defmodule FinanceSmith.DataLake.SyncWorkerCachedBalanceOrderingTest do
       reloaded = Ash.get!(Account, account.id, authorize?: false)
       assert reloaded.current_balance == 300_000
     end
+
+    # Regression: same mid-flight force supersession as above, but SyncWorker's
+    # get_balance returns :ok with an *older* paid payload. Without a post-fetch
+    # claim_still_held? gate inside BalanceRefresh.run/2, that older paid write
+    # would clobber the force-paid balances under a still-fresh stamp.
+    test "paid persist is skipped when a concurrent force supersedes during a successful paid fetch" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account = create_account!(plaid_item, %{plaid_account_id: "acc_paid_ok_supersede"})
+      assert is_nil(plaid_item.last_balance_synced_at)
+
+      token = Ash.load!(plaid_item, :access_token, authorize?: false).access_token
+
+      stub_sync_with_accounts(token, account.plaid_account_id, 1234.0)
+
+      expect(MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        assert {:claimed, _previous, claimed_at} =
+                 BalanceRefresh.force_claim_paid_refresh(plaid_item.id)
+
+        later = DateTime.add(claimed_at, 2, :second)
+
+        plaid_item
+        |> Ash.Changeset.for_update(:update, %{}, authorize?: false)
+        |> Ash.Changeset.force_change_attribute(:last_balance_synced_at, later)
+        |> Ash.update!(authorize?: false)
+
+        set_account_balance!(account, 300_000)
+
+        {:ok,
+         %Plaid.Accounts{
+           accounts: [
+             %Plaid.Accounts.Account{
+               account_id: account.plaid_account_id,
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 50.0,
+                 available: nil,
+                 limit: nil
+               }
+             }
+           ],
+           item: nil,
+           request_id: "req_paid_ok_supersede"
+         }}
+      end)
+
+      assert :ok = perform_job(SyncWorker, %{"plaid_item_id" => plaid_item.id})
+
+      reloaded = Ash.get!(Account, account.id, authorize?: false)
+      assert reloaded.current_balance == 300_000
+    end
+
+    # Regression: :partial_update used to be treated like a full paid failure,
+    # so SyncWorker applied sync-payload cached balances for *all* accounts and
+    # overwrote successful paid rows with older cached values.
+    test "does not apply cached fallback over successful paid rows on partial_update" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account_ok = create_account!(plaid_item, %{plaid_account_id: "acc_partial_ok_cached"})
+      account_fail = create_account!(plaid_item, %{plaid_account_id: "acc_partial_fail_cached"})
+      assert is_nil(plaid_item.last_balance_synced_at)
+
+      token = Ash.load!(plaid_item, :access_token, authorize?: false).access_token
+
+      stub(MockPlaid, :sync_transactions, fn %{access_token: ^token} ->
+        {:ok,
+         %SyncTransactionsResponse{
+           added: [],
+           modified: [],
+           removed: [],
+           next_cursor: "cursor_partial_cached",
+           has_more: false,
+           accounts: [
+             %Plaid.Accounts.Account{
+               account_id: "acc_partial_ok_cached",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 12.34,
+                 available: nil,
+                 limit: nil
+               }
+             },
+             %Plaid.Accounts.Account{
+               account_id: "acc_partial_fail_cached",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 56.78,
+                 available: nil,
+                 limit: nil
+               }
+             }
+           ]
+         }}
+      end)
+
+      expect(MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        Ash.destroy!(account_fail, authorize?: false)
+
+        {:ok,
+         %Plaid.Accounts{
+           accounts: [
+             %Plaid.Accounts.Account{
+               account_id: "acc_partial_ok_cached",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 100.0,
+                 available: nil,
+                 limit: nil
+               }
+             },
+             %Plaid.Accounts.Account{
+               account_id: "acc_partial_fail_cached",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 200.0,
+                 available: nil,
+                 limit: nil
+               }
+             }
+           ],
+           item: nil,
+           request_id: "req_partial_cached"
+         }}
+      end)
+
+      assert :ok = perform_job(SyncWorker, %{"plaid_item_id" => plaid_item.id})
+
+      updated_ok = Ash.get!(Account, account_ok.id, authorize?: false)
+      # Paid value (100.00 → 10_000 cents), not sync-payload cached (12.34 → 1234)
+      assert updated_ok.current_balance == 10_000
+    end
   end
 
   # Regression test for review finding: Plaid's /transactions/sync only

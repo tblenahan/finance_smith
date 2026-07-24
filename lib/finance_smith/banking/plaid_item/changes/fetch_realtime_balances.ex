@@ -3,13 +3,15 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances do
   Performs a real-time Plaid `/accounts/balance/get` call for the given
   `PlaidItem` and persists the returned balances via `Account.update_cached_balances`.
 
-  On success, ensures `last_balance_synced_at` reflects a current claim so
-  that `SyncWorker` and the UI can gate subsequent paid calls (the claim
-  stamps the window before Plaid; success also force-changes the attribute
-  on the Ash changeset).
+  On success, keeps the claim's DB `last_balance_synced_at` stamp (set before
+  Plaid) and mirrors it onto the Ash changeset — matching SyncWorker, which
+  does not re-stamp on paid success.
 
   On failure, restores the previous timestamp via compare-and-swap so the
   window re-opens for a legitimate retry instead of staying silently spent.
+  `{:error, :claim_superseded}` is not treated as this caller's failure: the
+  paid payload is discarded, restore is skipped, and the Ash changeset is
+  left unchanged so the superseding claim's stamp in the DB is preserved.
 
   ## Concurrency
 
@@ -79,7 +81,7 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances do
             changeset,
             Ash.Error.Changes.InvalidChanges.exception(
               message:
-                "We have a... discrepancy. A paid balance-refresh window was claimed less than #{BalanceRefresh.refresh_interval_hours()} hours ago."
+                "We have a... discrepancy. A balance refresh window was opened less than #{BalanceRefresh.refresh_interval_hours()} hours ago."
             )
           )
 
@@ -119,13 +121,22 @@ defmodule FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances do
         add_not_found_error(changeset)
 
       item ->
-        case BalanceRefresh.run(item) do
+        case BalanceRefresh.run(item, claimed_at: claimed_at) do
           :ok ->
             Ash.Changeset.force_change_attribute(
               changeset,
               :last_balance_synced_at,
-              DateTime.utc_now()
+              claimed_at
             )
+
+          {:error, :claim_superseded} ->
+            # DB already holds the superseding claim's stamp; accept [] means
+            # we must not force_change our older claimed_at back onto the row.
+            Logger.info(
+              "[FetchRealtimeBalances] Claim superseded during paid fetch — discarding paid payload. plaid_item=#{plaid_item_id}"
+            )
+
+            changeset
 
           {:error, reason} ->
             BalanceRefresh.restore_balance_timestamp(

@@ -259,6 +259,54 @@ defmodule FinanceSmith.Banking.BalanceRefreshTest do
       assert updated.current_balance == 30_000
       assert updated.available_balance == 27_000
     end
+
+    test "returns {:error, :claim_superseded} without writing when claimed_at is no longer held" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account = create_account!(plaid_item, %{plaid_account_id: "acc_supersede_run"})
+      item = load_item_with_token_and_accounts!(plaid_item)
+      token = item.access_token
+
+      assert {:claimed, _previous, claimed_at} = BalanceRefresh.claim_paid_refresh(plaid_item.id)
+
+      later = DateTime.add(claimed_at, 2, :second)
+
+      plaid_item
+      |> Ash.Changeset.for_update(:update, %{}, authorize?: false)
+      |> Ash.Changeset.force_change_attribute(:last_balance_synced_at, later)
+      |> Ash.update!(authorize?: false)
+
+      account
+      |> Ash.Changeset.for_update(
+        :update_cached_balances,
+        %{current_balance: 300_000, available_balance: nil, credit_limit: nil},
+        authorize?: false
+      )
+      |> Ash.update!(authorize?: false)
+
+      expect(FinanceSmith.Banking.MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        {:ok,
+         %Plaid.Accounts{
+           accounts: [
+             %Plaid.Accounts.Account{
+               account_id: "acc_supersede_run",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 50.0,
+                 available: nil,
+                 limit: nil
+               }
+             }
+           ],
+           item: nil,
+           request_id: "req_supersede_run"
+         }}
+      end)
+
+      assert {:error, :claim_superseded} = BalanceRefresh.run(item, claimed_at: claimed_at)
+
+      updated = Ash.get!(Account, account.id, authorize?: false)
+      assert updated.current_balance == 300_000
+    end
   end
 
   describe "claim_paid_refresh/1 and restore_balance_timestamp/3" do
