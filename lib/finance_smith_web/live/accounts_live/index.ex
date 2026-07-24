@@ -1,9 +1,14 @@
 defmodule FinanceSmithWeb.AccountsLive.Index do
   use FinanceSmithWeb, :live_view
 
+  import Ash.Expr
+
+  alias FinanceSmith.Banking
   alias FinanceSmith.Identity
   alias FinanceSmithWeb.MoneyFormat
   alias FinanceSmithWeb.ViewScope
+
+  require Logger
 
   def mount(_params, _session, socket) do
     user = socket.assigns.current_user
@@ -15,6 +20,7 @@ defmodule FinanceSmithWeb.AccountsLive.Index do
     end
 
     kpis = fetch_scoped_kpis(scope, user)
+    accounts = fetch_accounts(scope, user)
 
     socket =
       socket
@@ -23,6 +29,7 @@ defmodule FinanceSmithWeb.AccountsLive.Index do
       |> assign(:current_user, user)
       |> assign(:view_scope, view_scope)
       |> assign(:scope, scope)
+      |> assign(:accounts, accounts)
       |> assign(kpis)
 
     {:ok, socket}
@@ -201,6 +208,51 @@ defmodule FinanceSmithWeb.AccountsLive.Index do
           </p>
         </div>
       </div>
+
+      <section class="space-y-4">
+        <p class="text-[10px] font-mono text-gray-500 uppercase tracking-widest">
+          Connected Accounts
+        </p>
+
+        <%= if @accounts == [] do %>
+          <p class="text-sm text-gray-500 border border-gray-800 rounded-lg bg-gray-950/50 px-5 py-8 text-center">
+            There is no data here. Only an anomaly.
+          </p>
+        <% else %>
+          <ul class="border border-gray-800 rounded-lg overflow-hidden bg-gray-950/50 divide-y divide-gray-800">
+            <%= for account <- @accounts do %>
+              <li>
+                <.link
+                  navigate={~p"/accounts/#{account.id}"}
+                  class="flex items-center justify-between gap-4 px-5 py-4 hover:bg-gray-900/50 transition-colors group"
+                >
+                  <div class="min-w-0">
+                    <p class="text-gray-100 group-hover:text-gray-300 transition-colors truncate">
+                      {account.name}
+                      <%= if account.mask do %>
+                        <span class="text-gray-500">···{account.mask}</span>
+                      <% end %>
+                    </p>
+                    <p class="font-mono text-[10px] uppercase tracking-widest text-gray-600 mt-0.5">
+                      {account.type}<%= if account.subtype do %>
+                        <span class="text-gray-700"> / {account.subtype}</span>
+                      <% end %>
+                    </p>
+                  </div>
+                  <div class="flex items-center gap-4 shrink-0">
+                    <span class="font-mono text-sm text-gray-300">
+                      {MoneyFormat.format(account.current_balance)}
+                    </span>
+                    <span class="font-mono text-[10px] uppercase tracking-widest text-gray-600 group-hover:text-gray-400 transition-colors">
+                      View →
+                    </span>
+                  </div>
+                </.link>
+              </li>
+            <% end %>
+          </ul>
+        <% end %>
+      </section>
     </div>
     """
   end
@@ -255,10 +307,46 @@ defmodule FinanceSmithWeb.AccountsLive.Index do
     scope = ViewScope.parse_scope(view_scope)
     user = socket.assigns.current_user
     kpis = fetch_scoped_kpis(scope, user)
+    accounts = fetch_accounts(scope, user)
 
     socket
     |> assign(:view_scope, view_scope)
     |> assign(:scope, scope)
+    |> assign(:accounts, accounts)
     |> assign(kpis)
+  end
+
+  defp fetch_accounts(:personal, user) do
+    case Banking.list_accounts(
+           actor: user,
+           query: [
+             filter: expr(status == :active and plaid_item.user_id == ^user.id),
+             sort: [name: :asc]
+           ]
+         ) do
+      {:ok, accounts} ->
+        accounts
+
+      {:error, reason} ->
+        Logger.warning("[AccountsLive.Index] list_accounts failed", error: inspect(reason))
+        []
+    end
+  end
+
+  defp fetch_accounts(:household, user) do
+    case Banking.list_accounts(
+           actor: user,
+           query: [
+             filter: [status: :active],
+             sort: [name: :asc]
+           ]
+         ) do
+      {:ok, accounts} ->
+        accounts
+
+      {:error, reason} ->
+        Logger.warning("[AccountsLive.Index] list_accounts failed", error: inspect(reason))
+        []
+    end
   end
 end

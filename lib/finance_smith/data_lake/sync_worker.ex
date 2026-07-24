@@ -36,7 +36,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
     unique: [period: 300, fields: [:args]]
 
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.{Account, PlaidBalances, PlaidItem}
+  alias FinanceSmith.Banking.{BalanceRefresh, PlaidItem}
   alias FinanceSmith.DataLake.{ProcessWorker, TransactionProcessor, Uploader}
 
   require Ash.Query
@@ -68,34 +68,62 @@ defmodule FinanceSmith.DataLake.SyncWorker do
 
   # --- Sync loop ------------------------------------------------------------
 
-  defp sync_all_pages(plaid_item) do
+  defp sync_all_pages(plaid_item), do: sync_all_pages(plaid_item, %{})
+
+  # `accounts_by_id` accumulates `payload["accounts"]` across every page,
+  # keyed by Plaid's `account_id` — see `handle_page/3` for why a single
+  # page's accounts are not sufficient on their own.
+  defp sync_all_pages(plaid_item, accounts_by_id) do
     params = build_sync_params(plaid_item)
 
-    case FinanceSmith.Banking.Plaid.sync_transactions(params) do
+    case plaid_client().sync_transactions(params) do
       {:ok, sync_response} ->
-        handle_page(plaid_item, sync_response)
+        handle_page(plaid_item, sync_response, accounts_by_id)
 
       {:error, reason} ->
         handle_plaid_error(plaid_item, reason)
     end
   end
 
-  defp handle_page(plaid_item, sync_response) do
+  # Plaid's `/transactions/sync` only includes an account in a page's
+  # `accounts` array when that account had activity on that page — it is not
+  # the full account list repeated on every page. Using only the last page's
+  # `accounts` (as a previous version of this worker did) would silently miss
+  # cached-balance updates for any account whose only activity landed on an
+  # earlier page. Merging by `account_id` across all pages, with the later
+  # page winning on conflict (Plaid balances are already point-in-time as of
+  # each page, so the last-seen value for a given account is also the most
+  # recent), fixes this.
+  defp handle_page(plaid_item, sync_response, accounts_by_id) do
     payload = Uploader.to_sync_payload(sync_response)
 
     dispatch_processing(plaid_item, sync_response, payload)
 
     updated_item = persist_cursor!(plaid_item, payload["next_cursor"])
 
+    accounts_by_id = merge_accounts_by_id(accounts_by_id, payload["accounts"] || [])
+
     if payload["has_more"] do
       Logger.debug("[SyncWorker] has_more=true, fetching next page. plaid_item=#{plaid_item.id}")
-      sync_all_pages(updated_item)
+      sync_all_pages(updated_item, accounts_by_id)
     else
       Logger.info("[SyncWorker] Sync complete. plaid_item=#{plaid_item.id}")
-      refresh_balances(updated_item)
-      complete_sync!(updated_item)
+
+      loaded_item =
+        Ash.load!(updated_item, [:access_token, :accounts, :last_balance_synced_at],
+          authorize?: false
+        )
+
+      apply_cached_balances_and_maybe_refresh_realtime(loaded_item, Map.values(accounts_by_id))
+      complete_sync!(loaded_item)
       :ok
     end
+  end
+
+  defp merge_accounts_by_id(accounts_by_id, page_accounts) do
+    Enum.reduce(page_accounts, accounts_by_id, fn plaid_account, acc ->
+      Map.put(acc, plaid_account["account_id"], plaid_account)
+    end)
   end
 
   # --- Processing dispatch --------------------------------------------------
@@ -118,7 +146,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
               "[SyncWorker] ProcessWorker enqueue failed, falling back to in-memory processing. plaid_item=#{plaid_item.id} reason=#{inspect(reason)}"
             )
 
-            TransactionProcessor.process(plaid_item, payload)
+            TransactionProcessor.process(plaid_item, payload, apply_cached_balances?: false)
         end
 
       {:error, reason} ->
@@ -126,7 +154,7 @@ defmodule FinanceSmith.DataLake.SyncWorker do
           "[SyncWorker] B2 upload failed, falling back to in-memory processing. plaid_item=#{plaid_item.id} reason=#{inspect(reason)}"
         )
 
-        TransactionProcessor.process(plaid_item, payload)
+        TransactionProcessor.process(plaid_item, payload, apply_cached_balances?: false)
     end
   end
 
@@ -165,66 +193,112 @@ defmodule FinanceSmith.DataLake.SyncWorker do
     |> Ash.update!(authorize?: false)
   end
 
-  # Fetches real-time balances from Plaid and persists them for each account.
-  # A failure here logs a warning but does NOT raise — stale balances are
-  # preferable to losing a sync run or triggering Oban retries.
-  defp refresh_balances(%PlaidItem{access_token: token, accounts: accounts} = plaid_item) do
-    case plaid_client().get_balance(%{access_token: token}) do
-      {:ok, %{accounts: plaid_accounts}} ->
-        account_lookup = Map.new(accounts, fn a -> {a.plaid_account_id, a} end)
+  # Atomically claims the 24h paid-fetch window via
+  # BalanceRefresh.claim_paid_refresh/1 (a FOR UPDATE-locked claim) *before*
+  # touching balances at all — this closes two races at once:
+  #
+  # 1. This background run and a concurrent user-triggered UI refresh could
+  #    otherwise both observe "stale" and both issue a paid Plaid call.
+  # 2. Applying free cached balances from the sync payload without winning
+  #    that claim could overwrite a fresher paid refresh that completed
+  #    concurrently (e.g. a `force: true` UI refresh).
+  #
+  # Force-claim ordering (see BalanceRefresh "The `force: true` claim"):
+  # - If `force_claim_paid_refresh/1` commits *before* this claim, this run
+  #   gets `:already_fresh` and skips paid + cached entirely.
+  # - If this run already holds the claim and force supersedes mid-
+  #   `get_balance`, `BalanceRefresh.run/2` (with `claimed_at:`) discards
+  #   the older paid payload without writing (`:claim_superseded`); cached
+  #   fallback is also skipped. Overlapping paid RTTs / double-bill remain
+  #   an accepted tradeoff.
+  #
+  # After winning the claim, this run issues the paid fetch first. Free
+  # cached balances from the sync payload are applied only as a same-run
+  # fallback when the paid fetch fails entirely *and* the claim is still
+  # held — never before the paid attempt, and never on
+  # `{:error, :partial_update}` (successful paid rows must not be replaced
+  # by older sync-payload values).
+  #
+  # BalanceRefresh.claim_still_held?/2 re-checks ownership before the paid
+  # fetch, again inside `run/2` before persist, and again before any cached
+  # fallback, and skips the remaining work — without restoring — if a newer
+  # claim has already superseded this one; see BalanceRefresh moduledoc for
+  # why proceeding after losing ownership, or restoring in that case, would
+  # be wrong.
+  #
+  # A paid-fetch failure (Plaid API error or partial persistence failure)
+  # logs a warning but does NOT raise (stale balances never abort a sync run
+  # or trigger Oban retries) and does NOT restore the claimed timestamp —
+  # see BalanceRefresh's "SyncWorker does not restore on paid failure"
+  # moduledoc section for why leaving the window spent, rather than
+  # re-opening it for every subsequent sync run, is the correct behavior
+  # here. When the window is already fresh or the item can no longer be
+  # found, neither the cached nor the paid write is attempted — a fresher
+  # value (paid or otherwise) already won.
+  defp apply_cached_balances_and_maybe_refresh_realtime(
+         %PlaidItem{} = plaid_item,
+         payload_accounts
+       ) do
+    case BalanceRefresh.claim_paid_refresh(plaid_item.id) do
+      {:claimed, _previous, claimed_at} ->
+        apply_claimed_balances(plaid_item, payload_accounts, claimed_at)
 
-        # TODO: For households with many accounts, consider Ash.bulk_update or
-        # Task.async_stream with bounded concurrency to reduce sequential DB round-trips.
-        Enum.each(plaid_accounts, fn plaid_account ->
-          case Map.fetch(account_lookup, plaid_account.account_id) do
-            {:ok, %Account{duplicate_of_id: nil} = account} ->
-              new_balance = PlaidBalances.balance_to_cents(plaid_account.balances)
-              new_limit = PlaidBalances.balance_limit_to_cents(plaid_account.balances)
-
-              account
-              |> Ash.Changeset.for_update(
-                :update_balance,
-                %{current_balance: new_balance, credit_limit: new_limit},
-                authorize?: false
-              )
-              |> Ash.update(authorize?: false)
-              |> case do
-                {:ok, _updated} ->
-                  :ok
-
-                {:error, reason} ->
-                  Logger.warning(
-                    "[SyncWorker] Balance update failed for account=#{account.id} — skipping. reason=#{inspect(reason)}"
-                  )
-              end
-
-            {:ok, %Account{id: account_id, duplicate_of_id: _}} ->
-              Logger.debug(
-                "[SyncWorker] Balance refresh skipped for duplicate account=#{account_id} plaid_account_id=#{plaid_account.account_id}"
-              )
-
-            :error ->
-              Logger.warning(
-                "[SyncWorker] Balance refresh: unknown plaid_account_id=#{plaid_account.account_id} — skipping"
-              )
-          end
-        end)
-
-        Logger.info(
-          "[SyncWorker] Balances refreshed. plaid_item=#{plaid_item.id} accounts=#{length(plaid_accounts)}"
+      :already_fresh ->
+        Logger.debug(
+          "[SyncWorker] Balance fresh (< #{BalanceRefresh.refresh_interval_hours()}h) — skipping cached and paid updates. plaid_item=#{plaid_item.id}"
         )
 
-      {:error, reason} ->
+      :not_found ->
         Logger.warning(
-          "[SyncWorker] Balance refresh failed — sync still complete. plaid_item=#{plaid_item.id} reason=#{inspect(reason)}"
+          "[SyncWorker] PlaidItem not found while claiming balance refresh window — skipping cached and paid updates. plaid_item=#{plaid_item.id}"
         )
+    end
+  end
+
+  defp apply_claimed_balances(%PlaidItem{} = plaid_item, payload_accounts, claimed_at) do
+    if BalanceRefresh.claim_still_held?(plaid_item.id, claimed_at) do
+      Logger.info(
+        "[SyncWorker] Balance stale — fetching real-time (cached fallback only on full paid failure). plaid_item=#{plaid_item.id}"
+      )
+
+      case BalanceRefresh.run(plaid_item, claimed_at: claimed_at) do
+        :ok ->
+          :ok
+
+        {:error, :claim_superseded} ->
+          Logger.info(
+            "[SyncWorker] Claim superseded during paid fetch — discarding paid payload and skipping cached fallback. plaid_item=#{plaid_item.id}"
+          )
+
+        {:error, :partial_update} ->
+          Logger.warning(
+            "[SyncWorker] Partial paid balance persist — sync still complete, leaving the 24h window spent; skipping cached fallback so successful paid rows stay. plaid_item=#{plaid_item.id}"
+          )
+
+        {:error, reason} ->
+          Logger.warning(
+            "[SyncWorker] Real-time balance fetch failed — sync still complete, leaving the 24h window spent. plaid_item=#{plaid_item.id} reason=#{inspect(reason)}"
+          )
+
+          if BalanceRefresh.claim_still_held?(plaid_item.id, claimed_at) do
+            TransactionProcessor.apply_cached_balances(plaid_item, payload_accounts)
+          else
+            Logger.info(
+              "[SyncWorker] Claim superseded by a concurrent refresh after paid fetch failed — skipping cached fallback. plaid_item=#{plaid_item.id}"
+            )
+          end
+      end
+    else
+      Logger.info(
+        "[SyncWorker] Claim superseded by a concurrent refresh before paid fetch — skipping paid and cached updates. plaid_item=#{plaid_item.id}"
+      )
     end
   end
 
   defp load_plaid_item!(id) do
     Banking.PlaidItem
     |> Ash.Query.filter(id == ^id)
-    |> Ash.Query.load([:access_token, :accounts, user: :household])
+    |> Ash.Query.load([:access_token, :accounts, :last_balance_synced_at, user: :household])
     |> Ash.read_one!(authorize?: false)
     |> case do
       nil -> raise "[SyncWorker] PlaidItem not found: #{id}"

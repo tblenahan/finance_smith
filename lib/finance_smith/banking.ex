@@ -18,11 +18,20 @@ defmodule FinanceSmith.Banking do
 
       # Used by the dashboard to load per-plaid-item KPI aggregates.
       define :get_plaid_item_kpis, action: :read, get_by: [:id]
+
+      # Actor-authorized real-time balance refresh. Ownership/household policy
+      # applies; the access_token load is scoped inside FetchRealtimeBalances.
+      define :fetch_realtime_balances, action: :fetch_realtime_balances, get_by: [:id]
     end
 
     resource FinanceSmith.Banking.Account do
       define :get_account_by_id, action: :read_for_ui, get_by: [:id]
-      define :update_account_balance, action: :update_balance
+      define :list_accounts, action: :read_for_ui
+
+      # :update_cached_balances is intentionally NOT defined here. It is
+      # system-only — called by BalanceRefresh and TransactionProcessor via
+      # Ash.Changeset.for_update/3 directly with authorize?: false — and must
+      # not be exposed as a Banking.* code interface.
     end
 
     resource FinanceSmith.Banking.Transaction do

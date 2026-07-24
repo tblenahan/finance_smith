@@ -65,6 +65,39 @@ defmodule FinanceSmith.Banking.PlaidItemTest do
       assert [_] = Ash.load!(plaid_item, :accounts, authorize?: false).accounts
     end
 
+    test "seeds available_balance from Plaid accounts/get response" do
+      user = register_user!()
+      plaid_item_id = "item_avail_#{System.unique_integer([:positive])}"
+      access = "access-avail-#{System.unique_integer([:positive])}"
+
+      expect(FinanceSmith.Banking.MockPlaid, :exchange_public_token, fn %{
+                                                                          public_token:
+                                                                            "public-avail"
+                                                                        } ->
+        {:ok, %{access_token: access, item_id: plaid_item_id, request_id: "req_avail"}}
+      end)
+
+      expect(FinanceSmith.Banking.MockPlaid, :get_accounts, fn %{access_token: ^access} ->
+        {:ok,
+         PlaidTestHelpers.mock_accounts_response(
+           account_id: "acc_avail_test",
+           current: 1000.0,
+           available: 850.0
+         )}
+      end)
+
+      assert {:ok, plaid_item} =
+               Banking.create_plaid_item_from_public_token(
+                 "public-avail",
+                 %{institution_name: "Avail Bank"},
+                 actor: user
+               )
+
+      [account] = Ash.load!(plaid_item, :accounts, authorize?: false).accounts
+      assert account.current_balance == 100_000
+      assert account.available_balance == 85_000
+    end
+
     test "returns Ash error when Plaid exchange fails" do
       user = register_user!()
 

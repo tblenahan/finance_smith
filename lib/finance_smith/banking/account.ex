@@ -40,6 +40,7 @@ defmodule FinanceSmith.Banking.Account do
         :type,
         :subtype,
         :current_balance,
+        :available_balance,
         :credit_limit
       ]
 
@@ -48,13 +49,24 @@ defmodule FinanceSmith.Banking.Account do
 
       # :status is intentionally excluded — manual deactivation is preserved across syncs.
       # Plaid re-syncing an account should not resurrect one the user has deactivated.
-      upsert_fields [:name, :mask, :type, :subtype, :current_balance, :credit_limit]
+      upsert_fields [
+        :name,
+        :mask,
+        :type,
+        :subtype,
+        :current_balance,
+        :available_balance,
+        :credit_limit
+      ]
 
       change FinanceSmith.Banking.Account.Changes.DetectDuplicateAccount
     end
 
-    update :update_balance do
-      accept [:current_balance, :credit_limit]
+    # System-only. Called by both SyncWorker (real-time path) and
+    # TransactionProcessor (cached path). Callers use authorize?: false.
+    # available_balance may legitimately be nil for certain account types.
+    update :update_cached_balances do
+      accept [:current_balance, :available_balance, :credit_limit]
     end
   end
 
@@ -90,6 +102,9 @@ defmodule FinanceSmith.Banking.Account do
     attribute :subtype, :string, public?: true
 
     attribute :current_balance, :integer, public?: true
+    # Stored directly from Plaid balances.available. nil is valid — certain
+    # account types (e.g. investment accounts) do not expose an available balance.
+    attribute :available_balance, :integer, public?: true
     attribute :credit_limit, :integer, public?: true
 
     attribute :status, FinanceSmith.Banking.Types.AccountStatus do

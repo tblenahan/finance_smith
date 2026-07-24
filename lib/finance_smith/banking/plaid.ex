@@ -27,6 +27,7 @@ defmodule FinanceSmith.Banking.Plaid do
 
   @behaviour FinanceSmith.Banking.PlaidBehaviour
 
+  alias FinanceSmith.Banking.Plaid.SyncTransactionsResponse
   alias Plaid.Client
   alias Plaid.Client.Request
 
@@ -171,11 +172,48 @@ defmodule FinanceSmith.Banking.Plaid do
       the initial sync)
     - `:count` – max number of transactions to return (default: 100)
 
-  Returns `{:ok, %Plaid.Transactions.Sync{}}`.
+  Returns `{:ok, %SyncTransactionsResponse{}}` including cached `accounts`
+  balances from the sync payload (omitted by upstream `plaid_elixir`).
   """
-  @spec sync_transactions(map()) :: {:ok, Plaid.Transactions.Sync.t()} | {:error, term()}
+  @spec sync_transactions(map()) :: {:ok, SyncTransactionsResponse.t()} | {:error, term()}
   def sync_transactions(params) do
-    Plaid.Transactions.sync(params)
+    Request
+    |> struct(method: :post, endpoint: "transactions/sync", body: params)
+    |> Request.add_metadata()
+    |> Plaid.send_request(Client.new())
+    |> Plaid.handle_response(&map_sync_transactions/1)
+  end
+
+  defp map_sync_transactions(body) do
+    Poison.Decode.transform(
+      body,
+      %{
+        as: %SyncTransactionsResponse{
+          added: [
+            %Plaid.Transactions.Transaction{
+              location: %Plaid.Transactions.Transaction.Location{},
+              payment_meta: %Plaid.Transactions.Transaction.PaymentMeta{},
+              personal_finance_category: %Plaid.Transactions.Transaction.PersonalFinanceCategory{}
+            }
+          ],
+          modified: [
+            %Plaid.Transactions.Transaction{
+              location: %Plaid.Transactions.Transaction.Location{},
+              payment_meta: %Plaid.Transactions.Transaction.PaymentMeta{},
+              personal_finance_category: %Plaid.Transactions.Transaction.PersonalFinanceCategory{}
+            }
+          ],
+          removed: [
+            %Plaid.Transactions.RemovedTransaction{}
+          ],
+          accounts: [
+            %Plaid.Accounts.Account{
+              balances: %Plaid.Accounts.Account.Balance{}
+            }
+          ]
+        }
+      }
+    )
   end
 
   defmodule Sandbox do

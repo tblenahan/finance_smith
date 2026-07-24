@@ -48,6 +48,7 @@ defmodule FinanceSmith.Banking.PlaidItem do
                   :institution_name,
                   :status,
                   :last_synced_at,
+                  :last_balance_synced_at,
                   :user_id,
                   :inserted_at,
                   :updated_at
@@ -69,6 +70,40 @@ defmodule FinanceSmith.Banking.PlaidItem do
       accept []
       change set_attribute(:last_synced_at, &DateTime.utc_now/0)
     end
+
+    # System-only test/fixture helper for setting last_balance_synced_at
+    # directly with authorize?: false. Production code never calls this
+    # action: SyncWorker advances the timestamp via the atomic
+    # `BalanceRefresh.claim_paid_refresh/1` SQL claim, and the actor-facing
+    # `:fetch_realtime_balances` change sets it via force_change_attribute on
+    # success. Kept for tests that need to seed a fresh/stale timestamp
+    # without going through either of those paths.
+    update :update_balance_timestamp do
+      accept []
+      change set_attribute(:last_balance_synced_at, &DateTime.utc_now/0)
+    end
+
+    # Actor-facing real-time balance refresh. Ownership/household policy applies
+    # (see policies block). The change module loads access_token + accounts with
+    # authorize?: false tightly scoped to that single load — see AGENT_SECURITY.md
+    # rule 6 for the full list of permitted access_token load sites.
+    update :fetch_realtime_balances do
+      description "Triggers a real-time Plaid /accounts/balance/get call for this item."
+
+      accept []
+
+      argument :force, :boolean do
+        default false
+        allow_nil? false
+      end
+
+      require_atomic? false
+      # Claim must commit (and release FOR UPDATE) before the Plaid HTTP call —
+      # Ash's default update transaction would hold the lock across the RTT and
+      # hide the stamp from concurrent SyncWorker claims. Matches BalanceRefresh.
+      transaction? false
+      change FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances
+    end
   end
 
   policies do
@@ -88,12 +123,22 @@ defmodule FinanceSmith.Banking.PlaidItem do
       authorize_if actor_present()
     end
 
+    # User-facing balance refresh: actor must own this item or share a household.
+    # Kept as a dedicated policy so the intent is explicit and auditable.
+    policy action(:fetch_realtime_balances) do
+      authorize_if expr(
+                     user_id == ^actor(:id) or
+                       (not is_nil(^actor(:household_id)) and
+                          user.household_id == ^actor(:household_id))
+                   )
+    end
+
     # All other writes are system-only. SyncWorker / complete_sync call with
     # `authorize?: false`, bypassing policies entirely. The `forbid_unless`
-    # passes (no decision) for :create_from_public_token, which is already
-    # covered by its own policy above; it forbids every other actor-driven write.
+    # allowlist passes (no decision) for the two actor-driven writes above;
+    # it forbids every other actor-driven write path.
     policy action_type([:create, :update, :destroy]) do
-      forbid_unless action(:create_from_public_token)
+      forbid_unless action([:create_from_public_token, :fetch_realtime_balances])
       authorize_if always()
     end
   end
@@ -120,6 +165,17 @@ defmodule FinanceSmith.Banking.PlaidItem do
     attribute :institution_name, :string
 
     attribute :last_synced_at, :utc_datetime_usec do
+      public? true
+    end
+
+    # Paid-fetch window gate: stamped when a SyncWorker or UI refresh *claims*
+    # the 24h `/accounts/balance/get` window (before the Plaid call completes).
+    # nil means no paid-fetch window has been claimed yet. SyncWorker leaves the
+    # stamp in place even if its paid call later fails (to avoid re-billing on
+    # every sync during an outage); the actor-facing path restores on failure.
+    # Used by SyncWorker to gate the rate-limit window and by the UI to surface
+    # the cost advisory — not a guarantee that the last paid call succeeded.
+    attribute :last_balance_synced_at, :utc_datetime_usec do
       public? true
     end
 

@@ -47,7 +47,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
 
   alias FinanceSmith.DataLake.{B2, KeyBuilder}
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.{CategoryResolution, PlaidItem, Transaction}
+  alias FinanceSmith.Banking.{Account, CategoryResolution, PlaidBalances, PlaidItem, Transaction}
 
   require Ash.Query
   require Logger
@@ -59,10 +59,24 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
   inside `process/2` if not already present.
   `payload` is a string-keyed map as produced by `Uploader.to_sync_payload/1`.
 
+  ## Options
+
+  - `:apply_cached_balances?` (boolean, default `false`) — when `true`,
+    applies the free cached balances from `payload["accounts"]` after the
+    transaction commits. Defaults to `false` because cached-balance writes
+    are owned by `SyncWorker`'s claim-gated path
+    (`apply_cached_balances_and_maybe_refresh_realtime/2`), which only calls
+    `TransactionProcessor.apply_cached_balances/2` directly after winning a
+    `BalanceRefresh.claim_paid_refresh/1` claim — never through this option.
+    Callers must opt in explicitly; defaulting to `true` would let any new
+    direct caller silently write cached balances outside that claim gate.
+
   Returns `:ok` or raises on failure.
   """
-  @spec process(PlaidItem.t(), map()) :: :ok
-  def process(%PlaidItem{} = plaid_item, payload) when is_map(payload) do
+  @spec process(PlaidItem.t(), map(), keyword()) :: :ok
+  def process(%PlaidItem{} = plaid_item, payload, opts \\ []) when is_map(payload) do
+    apply_cached_balances? = Keyword.get(opts, :apply_cached_balances?, false)
+
     Logger.info(
       "[TransactionProcessor] Processing. plaid_item=#{plaid_item.id} added=#{length(payload["added"] || [])} modified=#{length(payload["modified"] || [])} removed=#{length(payload["removed"] || [])}"
     )
@@ -100,6 +114,13 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
       {:ok, notifications} when is_list(notifications) ->
         Ash.Notifier.notify(notifications)
 
+        if apply_cached_balances? do
+          # Apply cached balances from the sync payload after the transaction
+          # commits so that account balance reads are consistent. These are the
+          # free cached values from /transactions/sync — no paid API call.
+          apply_cached_balances(plaid_item, payload["accounts"] || [])
+        end
+
         Logger.info("[TransactionProcessor] Done. plaid_item=#{plaid_item.id}")
         :ok
 
@@ -132,7 +153,7 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
     plaid_item_id = extract_plaid_item_id!(object_key)
     plaid_item = load_plaid_item_by_plaid_id!(plaid_item_id)
 
-    process(plaid_item, payload)
+    process(plaid_item, payload, apply_cached_balances?: false)
   end
 
   # --- Household context normalization --------------------------------------
@@ -386,6 +407,55 @@ defmodule FinanceSmith.DataLake.TransactionProcessor do
   defp dollars_to_cents(amount) when is_number(amount) do
     round(amount * 100)
   end
+
+  # --- Cached balance application -------------------------------------------
+
+  @doc false
+  @spec apply_cached_balances(PlaidItem.t(), list()) :: :ok
+  def apply_cached_balances(%PlaidItem{accounts: accounts}, payload_accounts)
+      when is_list(payload_accounts) do
+    account_lookup = Map.new(accounts, fn a -> {a.plaid_account_id, a} end)
+
+    Enum.each(payload_accounts, fn plaid_account ->
+      plaid_account_id = plaid_account["account_id"]
+
+      case Map.fetch(account_lookup, plaid_account_id) do
+        {:ok, %Account{duplicate_of_id: nil} = account} ->
+          balances = plaid_account["balances"] || %{}
+
+          attrs = %{
+            current_balance: PlaidBalances.balance_to_cents_from_json(balances),
+            available_balance: PlaidBalances.balance_available_to_cents_from_json(balances),
+            credit_limit: PlaidBalances.balance_limit_to_cents_from_json(balances)
+          }
+
+          account
+          |> Ash.Changeset.for_update(:update_cached_balances, attrs, authorize?: false)
+          |> Ash.update(authorize?: false)
+          |> case do
+            {:ok, _updated} ->
+              :ok
+
+            {:error, reason} ->
+              Logger.warning(
+                "[TransactionProcessor] Cached balance update failed for account=#{account.id} — skipping. reason=#{inspect(reason)}"
+              )
+          end
+
+        {:ok, %Account{id: account_id, duplicate_of_id: _}} ->
+          Logger.debug(
+            "[TransactionProcessor] Cached balance skipped for duplicate account=#{account_id} plaid_account_id=#{plaid_account_id}"
+          )
+
+        :error ->
+          Logger.debug(
+            "[TransactionProcessor] Cached balance: unknown plaid_account_id=#{plaid_account_id} — skipping"
+          )
+      end
+    end)
+  end
+
+  def apply_cached_balances(_plaid_item, _payload_accounts), do: :ok
 
   # --- B2 download helpers (webhook path) -----------------------------------
 

@@ -14,5 +14,6 @@ defmodule FinanceSmith.Banking.PlaidBehaviour do
   @callback get_item(map()) :: {:ok, Plaid.Item.t()} | {:error, term()}
   @callback get_institution(map()) :: {:ok, Plaid.Institutions.Institution.t()} | {:error, term()}
   @callback remove_item(map()) :: {:ok, map()} | {:error, term()}
-  @callback sync_transactions(map()) :: {:ok, Plaid.Transactions.Sync.t()} | {:error, term()}
+  @callback sync_transactions(map()) ::
+              {:ok, FinanceSmith.Banking.Plaid.SyncTransactionsResponse.t()} | {:error, term()}
 end
