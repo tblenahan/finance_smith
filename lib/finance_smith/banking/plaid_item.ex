@@ -98,6 +98,10 @@ defmodule FinanceSmith.Banking.PlaidItem do
       end
 
       require_atomic? false
+      # Claim must commit (and release FOR UPDATE) before the Plaid HTTP call —
+      # Ash's default update transaction would hold the lock across the RTT and
+      # hide the stamp from concurrent SyncWorker claims. Matches BalanceRefresh.
+      transaction? false
       change FinanceSmith.Banking.PlaidItem.Changes.FetchRealtimeBalances
     end
   end

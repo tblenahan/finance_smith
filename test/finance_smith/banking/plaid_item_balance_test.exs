@@ -344,6 +344,52 @@ defmodule FinanceSmith.Banking.PlaidItemBalanceTest do
 
       refute is_nil(updated_item.last_balance_synced_at)
     end
+
+    # Regression: Ash update defaults to transaction?: true, which would keep
+    # the claim's FOR UPDATE held across the Plaid RTT. transaction? false on
+    # :fetch_realtime_balances must let the claim finish before get_balance so
+    # the stamp is already visible when Plaid is invoked.
+    #
+    # A second Task cannot claim mid-flight under DataCase's shared sandbox
+    # (one connection); we assert the load-bearing invariants instead: the
+    # action opts out of Ash's wrapping transaction, and the stamp is present
+    # at the moment get_balance runs.
+    test "commits the paid-window claim before the Plaid HTTP call" do
+      assert Ash.Resource.Info.action(PlaidItem, :fetch_realtime_balances).transaction? == false
+
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      _account = create_account!(plaid_item, %{plaid_account_id: "acc_claim_before_plaid"})
+      token = Ash.load!(plaid_item, :access_token, authorize?: false).access_token
+
+      parent = self()
+
+      expect(FinanceSmith.Banking.MockPlaid, :get_balance, fn %{access_token: ^token} ->
+        item = Ash.get!(PlaidItem, plaid_item.id, authorize?: false)
+        send(parent, {:plaid_entered, item.last_balance_synced_at})
+
+        {:ok,
+         %Plaid.Accounts{
+           accounts: [
+             %Plaid.Accounts.Account{
+               account_id: "acc_claim_before_plaid",
+               balances: %Plaid.Accounts.Account.Balance{
+                 current: 1000.0,
+                 available: nil,
+                 limit: nil
+               }
+             }
+           ],
+           item: nil,
+           request_id: "req_claim_before_plaid"
+         }}
+      end)
+
+      assert {:ok, _updated_item} = Banking.fetch_realtime_balances(plaid_item.id, actor: user)
+
+      assert_receive {:plaid_entered, stamp}, 5_000
+      refute is_nil(stamp)
+    end
   end
 
   # -------------------------------------------------------------------------
