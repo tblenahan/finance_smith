@@ -63,7 +63,8 @@ config :ash,
     AshPostgres.Timestamptz,
     AshPostgres.TimestamptzUsec,
     FinanceSmith.Banking.Types.PlaidItemStatus,
-    FinanceSmith.Banking.Types.AccountStatus
+    FinanceSmith.Banking.Types.AccountStatus,
+    FinanceSmith.Banking.Types.PeriodType
   ]
 
 config :spark,

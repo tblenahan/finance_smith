@@ -71,6 +71,8 @@ defmodule FinanceSmith.Banking.MetaCategory do
     end
 
     has_many :category_mappings, FinanceSmith.Banking.CategoryMapping
+    has_many :transactions, FinanceSmith.Banking.Transaction
+    has_many :budget_targets, FinanceSmith.Banking.BudgetTarget
   end
 
   identities do

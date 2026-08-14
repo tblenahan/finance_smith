@@ -4,7 +4,7 @@ defmodule FinanceSmith.Banking.PoliciesTest do
   import FinanceSmith.BankingFixtures
 
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.{Account, PlaidItem, Transaction}
+  alias FinanceSmith.Banking.{Account, BudgetTarget, MetaCategory, PlaidItem, Transaction}
   alias FinanceSmith.Identity
 
   require Ash.Query
@@ -720,6 +720,105 @@ defmodule FinanceSmith.Banking.PoliciesTest do
 
       assert {:error, %Ash.Error.Invalid{errors: [%Ash.Error.Query.NotFound{} | _]}} =
                Identity.get_household_with_kpis(owner.household_id, actor: stranger)
+    end
+  end
+
+  defp seed_meta_category!(household_id, name) do
+    unique = System.unique_integer([:positive])
+
+    MetaCategory
+    |> Ash.Changeset.for_create(:create_system, %{
+      name: "#{name}-#{unique}",
+      household_id: household_id
+    })
+    |> Ash.create!(authorize?: false)
+  end
+
+  describe "BudgetTarget.read policy" do
+    test "owner can read their BudgetTarget" do
+      user = register_user!()
+      groceries = seed_meta_category!(user.household_id, "Groceries")
+      target = create_budget_target!(user, groceries)
+
+      assert {:ok, %BudgetTarget{id: id}} =
+               Banking.get_budget_target_by_id(target.id, actor: user)
+
+      assert id == target.id
+    end
+
+    test "stranger cannot read another household's BudgetTarget" do
+      owner = register_user!()
+      stranger = register_user!()
+      groceries = seed_meta_category!(owner.household_id, "Groceries")
+      target = create_budget_target!(owner, groceries)
+
+      assert {:error, %Ash.Error.Invalid{errors: [%Ash.Error.Query.NotFound{} | _]}} =
+               Banking.get_budget_target_by_id(target.id, actor: stranger)
+
+      assert {:ok, []} = Banking.list_budget_targets(actor: stranger)
+    end
+  end
+
+  describe "BudgetTarget.create policy" do
+    test "forbidden without an actor" do
+      user = register_user!()
+      groceries = seed_meta_category!(user.household_id, "Groceries")
+
+      assert {:error, %Ash.Error.Forbidden{}} =
+               Banking.create_budget_target(%{
+                 amount: 1_000,
+                 period_type: :monthly,
+                 meta_category_id: groceries.id
+               })
+    end
+
+    test "user cannot create a target in another household" do
+      owner = register_user!()
+      stranger = register_user!()
+      groceries = seed_meta_category!(owner.household_id, "Groceries")
+
+      target =
+        Banking.create_budget_target!(
+          %{amount: 1_000, period_type: :monthly, meta_category_id: groceries.id},
+          actor: stranger
+        )
+
+      assert target.household_id == stranger.household_id
+      refute target.household_id == owner.household_id
+
+      assert {:ok, []} = Banking.list_budget_targets(actor: owner)
+    end
+  end
+
+  describe "BudgetTarget write policies" do
+    test "user cannot update or destroy another household's target" do
+      owner = register_user!()
+      stranger = register_user!()
+      groceries = seed_meta_category!(owner.household_id, "Groceries")
+      target = create_budget_target!(owner, groceries)
+
+      assert {:error, %Ash.Error.Forbidden{}} =
+               Banking.update_budget_target(target, %{amount: 1}, actor: stranger)
+
+      assert {:error, %Ash.Error.Forbidden{}} =
+               Banking.destroy_budget_target(target, actor: stranger)
+    end
+  end
+
+  describe "Household isolation — BudgetTarget reads" do
+    test "same-household member can read another member's BudgetTarget" do
+      owner = register_user!()
+      member = register_user!()
+      _member = share_household!(owner, member)
+      member = Ash.get!(FinanceSmith.Identity.User, member.id, authorize?: false)
+
+      groceries = seed_meta_category!(owner.household_id, "Groceries")
+      target = create_budget_target!(owner, groceries)
+
+      assert {:ok, %BudgetTarget{id: id}} =
+               Banking.get_budget_target_by_id(target.id, actor: member)
+
+      assert id == target.id
     end
   end
 end

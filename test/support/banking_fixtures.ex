@@ -6,6 +6,7 @@ defmodule FinanceSmith.BankingFixtures do
   encrypted `access_token` on `PlaidItem` records.
   """
 
+  alias FinanceSmith.Banking
   alias FinanceSmith.Banking.{Account, PlaidItem, Transaction}
 
   @doc """
@@ -65,11 +66,31 @@ defmodule FinanceSmith.BankingFixtures do
       merchant_name: Map.get(attrs_map, :merchant_name, "Test Merchant"),
       account_id: account.id,
       is_pending: Map.get(attrs_map, :is_pending, false),
-      personal_finance_category: Map.get(attrs_map, :personal_finance_category, nil)
+      personal_finance_category: Map.get(attrs_map, :personal_finance_category, nil),
+      meta_category_id: Map.get(attrs_map, :meta_category_id)
     }
 
     Transaction
     |> Ash.Changeset.for_create(:create, defaults)
     |> Ash.create!(authorize?: false)
+  end
+
+  @doc """
+  Creates a `BudgetTarget` for `meta_category` as `user`.
+
+  Uses the primary `:create` action with `actor: user` so household_id is
+  stamped by policy-compliant `SetHouseholdFromActor`.
+  """
+  def create_budget_target!(user, meta_category, attrs \\ %{}) do
+    attrs_map = Map.new(attrs)
+
+    Banking.create_budget_target!(
+      %{
+        amount: Map.get(attrs_map, :amount, 10_000),
+        period_type: Map.get(attrs_map, :period_type, :monthly),
+        meta_category_id: meta_category.id
+      },
+      actor: user
+    )
   end
 end
