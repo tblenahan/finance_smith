@@ -7,7 +7,7 @@ defmodule FinanceSmith.BankingFixtures do
   """
 
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.{Account, PlaidItem, Transaction}
+  alias FinanceSmith.Banking.{Account, MetaCategory, PlaidItem, Transaction}
 
   @doc """
   Creates a `PlaidItem` bypassing authorization, using Cloak-correct token encryption.
@@ -72,6 +72,22 @@ defmodule FinanceSmith.BankingFixtures do
 
     Transaction
     |> Ash.Changeset.for_create(:create, defaults)
+    |> Ash.create!(authorize?: false)
+  end
+
+  @doc """
+  Creates a `MetaCategory` for `household_id` via `:create_system`, bypassing
+  authorization. Appends a unique suffix so concurrent tests do not collide on
+  the unique-name-per-household identity.
+  """
+  def seed_meta_category!(household_id, name) do
+    unique = System.unique_integer([:positive])
+
+    MetaCategory
+    |> Ash.Changeset.for_create(:create_system, %{
+      name: "#{name}-#{unique}",
+      household_id: household_id
+    })
     |> Ash.create!(authorize?: false)
   end
 

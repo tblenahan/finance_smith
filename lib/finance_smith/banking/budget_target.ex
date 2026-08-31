@@ -41,8 +41,12 @@ defmodule FinanceSmith.Banking.BudgetTarget do
       authorize_if expr(household_id == ^actor(:household_id))
     end
 
+    # Requires the referenced MetaCategory to belong to the actor's household so a
+    # target can never point at another household's category. Evaluated post-insert
+    # inside the action's transaction; a mismatch rolls back and returns Forbidden.
     policy action(:create) do
-      authorize_if expr(not is_nil(^actor(:household_id)))
+      forbid_if expr(is_nil(^actor(:household_id)))
+      authorize_if expr(meta_category.household_id == ^actor(:household_id))
     end
 
     policy action_type([:update, :destroy]) do

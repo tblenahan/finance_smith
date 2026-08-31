@@ -4,7 +4,7 @@ defmodule FinanceSmith.Banking.PoliciesTest do
   import FinanceSmith.BankingFixtures
 
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.{Account, BudgetTarget, MetaCategory, PlaidItem, Transaction}
+  alias FinanceSmith.Banking.{Account, BudgetTarget, PlaidItem, Transaction}
   alias FinanceSmith.Identity
 
   require Ash.Query
@@ -723,17 +723,6 @@ defmodule FinanceSmith.Banking.PoliciesTest do
     end
   end
 
-  defp seed_meta_category!(household_id, name) do
-    unique = System.unique_integer([:positive])
-
-    MetaCategory
-    |> Ash.Changeset.for_create(:create_system, %{
-      name: "#{name}-#{unique}",
-      household_id: household_id
-    })
-    |> Ash.create!(authorize?: false)
-  end
-
   describe "BudgetTarget.read policy" do
     test "owner can read their BudgetTarget" do
       user = register_user!()
@@ -772,21 +761,47 @@ defmodule FinanceSmith.Banking.PoliciesTest do
                })
     end
 
-    test "user cannot create a target in another household" do
+    test "user cannot create a target for another household's meta_category" do
       owner = register_user!()
       stranger = register_user!()
+      groceries = seed_meta_category!(owner.household_id, "Groceries")
+
+      assert {:error, %Ash.Error.Forbidden{}} =
+               Banking.create_budget_target(
+                 %{amount: 1_000, period_type: :monthly, meta_category_id: groceries.id},
+                 actor: stranger
+               )
+
+      # Insert must have been rolled back, not merely hidden from the stranger.
+      assert {:ok, []} = Banking.list_budget_targets(actor: stranger)
+
+      # Owner can still claim the unique (meta_category, period_type) slot.
+      target =
+        Banking.create_budget_target!(
+          %{amount: 1_000, period_type: :monthly, meta_category_id: groceries.id},
+          actor: owner
+        )
+
+      assert target.household_id == owner.household_id
+      assert target.meta_category_id == groceries.id
+    end
+
+    test "same-household member can create a target for a shared meta_category" do
+      owner = register_user!()
+      member = register_user!()
+      _member = share_household!(owner, member)
+      member = Ash.get!(FinanceSmith.Identity.User, member.id, authorize?: false)
+
       groceries = seed_meta_category!(owner.household_id, "Groceries")
 
       target =
         Banking.create_budget_target!(
           %{amount: 1_000, period_type: :monthly, meta_category_id: groceries.id},
-          actor: stranger
+          actor: member
         )
 
-      assert target.household_id == stranger.household_id
-      refute target.household_id == owner.household_id
-
-      assert {:ok, []} = Banking.list_budget_targets(actor: owner)
+      assert target.household_id == owner.household_id
+      assert target.meta_category_id == groceries.id
     end
   end
 

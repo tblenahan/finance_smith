@@ -4,24 +4,13 @@ defmodule FinanceSmith.Banking.BudgetTargetTest do
   import FinanceSmith.BankingFixtures
 
   alias FinanceSmith.Banking
-  alias FinanceSmith.Banking.{DatePeriod, MetaCategory}
+  alias FinanceSmith.Banking.DatePeriod
   alias FinanceSmith.Identity
 
   defp unique_email, do: "user-#{System.unique_integer([:positive])}@example.com"
 
   defp register_user! do
     Identity.register!(unique_email(), "ValidPassword1!", authorize?: false)
-  end
-
-  defp seed_meta_category!(household_id, name) do
-    unique = System.unique_integer([:positive])
-
-    MetaCategory
-    |> Ash.Changeset.for_create(:create_system, %{
-      name: "#{name}-#{unique}",
-      household_id: household_id
-    })
-    |> Ash.create!(authorize?: false)
   end
 
   defp create_duplicate_account!(plaid_item, canonical_account) do
@@ -142,6 +131,59 @@ defmodule FinanceSmith.Banking.BudgetTargetTest do
       [loaded] = load_window!(user, start_date, end_date)
       assert loaded.actual_spend == 2_000
       assert loaded.projected_spend == 0
+    end
+
+    test "extrapolates spend across an in-progress window with numeric rounding" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account = create_account!(plaid_item)
+      groceries = seed_meta_category!(user.household_id, "Groceries")
+      _target = create_budget_target!(user, groceries, %{amount: 10_000, period_type: :monthly})
+
+      today = Date.utc_today()
+      start_date = Date.add(today, -2)
+      end_date = Date.add(today, 2)
+
+      assert DatePeriod.day_count(start_date, end_date) == 5
+      assert DatePeriod.elapsed_days(start_date, end_date, today) == 3
+
+      _outflow =
+        create_transaction!(account,
+          amount: 1_000,
+          date: Date.add(today, -1),
+          meta_category_id: groceries.id
+        )
+
+      # 1000 * 5 / 3 = 1666.6... → 1667
+      [loaded] = load_window!(user, start_date, end_date)
+      assert loaded.actual_spend == 1_000
+      assert loaded.projected_spend == 1_667
+    end
+
+    test "equals actual_spend when the window is fully elapsed" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account = create_account!(plaid_item)
+      groceries = seed_meta_category!(user.household_id, "Groceries")
+      _target = create_budget_target!(user, groceries, %{amount: 10_000, period_type: :monthly})
+
+      today = Date.utc_today()
+      start_date = Date.add(today, -20)
+      end_date = Date.add(today, -11)
+
+      assert DatePeriod.day_count(start_date, end_date) == 10
+      assert DatePeriod.elapsed_days(start_date, end_date, today) == 10
+
+      _outflow =
+        create_transaction!(account,
+          amount: 2_500,
+          date: Date.add(today, -15),
+          meta_category_id: groceries.id
+        )
+
+      [loaded] = load_window!(user, start_date, end_date)
+      assert loaded.actual_spend == 2_500
+      assert loaded.projected_spend == 2_500
     end
   end
 
