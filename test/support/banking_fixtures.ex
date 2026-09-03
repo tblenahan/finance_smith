@@ -6,7 +6,8 @@ defmodule FinanceSmith.BankingFixtures do
   encrypted `access_token` on `PlaidItem` records.
   """
 
-  alias FinanceSmith.Banking.{Account, PlaidItem, Transaction}
+  alias FinanceSmith.Banking
+  alias FinanceSmith.Banking.{Account, MetaCategory, PlaidItem, Transaction}
 
   @doc """
   Creates a `PlaidItem` bypassing authorization, using Cloak-correct token encryption.
@@ -65,11 +66,47 @@ defmodule FinanceSmith.BankingFixtures do
       merchant_name: Map.get(attrs_map, :merchant_name, "Test Merchant"),
       account_id: account.id,
       is_pending: Map.get(attrs_map, :is_pending, false),
-      personal_finance_category: Map.get(attrs_map, :personal_finance_category, nil)
+      personal_finance_category: Map.get(attrs_map, :personal_finance_category, nil),
+      meta_category_id: Map.get(attrs_map, :meta_category_id)
     }
 
     Transaction
     |> Ash.Changeset.for_create(:create, defaults)
     |> Ash.create!(authorize?: false)
+  end
+
+  @doc """
+  Creates a `MetaCategory` for `household_id` via `:create_system`, bypassing
+  authorization. Appends a unique suffix so concurrent tests do not collide on
+  the unique-name-per-household identity.
+  """
+  def seed_meta_category!(household_id, name) do
+    unique = System.unique_integer([:positive])
+
+    MetaCategory
+    |> Ash.Changeset.for_create(:create_system, %{
+      name: "#{name}-#{unique}",
+      household_id: household_id
+    })
+    |> Ash.create!(authorize?: false)
+  end
+
+  @doc """
+  Creates a `BudgetTarget` for `meta_category` as `user`.
+
+  Uses the primary `:create` action with `actor: user` so household_id is
+  stamped by policy-compliant `SetHouseholdFromActor`.
+  """
+  def create_budget_target!(user, meta_category, attrs \\ %{}) do
+    attrs_map = Map.new(attrs)
+
+    Banking.create_budget_target!(
+      %{
+        amount: Map.get(attrs_map, :amount, 10_000),
+        period_type: Map.get(attrs_map, :period_type, :monthly),
+        meta_category_id: meta_category.id
+      },
+      actor: user
+    )
   end
 end

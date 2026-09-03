@@ -15,12 +15,6 @@ defmodule FinanceSmith.DataLake.TransactionProcessorTest do
     Identity.register!(unique_email(), "ValidPassword1!", authorize?: false)
   end
 
-  defp seed_meta_category!(household_id, name) do
-    MetaCategory
-    |> Ash.Changeset.for_create(:create_system, %{name: name, household_id: household_id})
-    |> Ash.create!(authorize?: false)
-  end
-
   defp seed_mapping!(household_id, meta_category_id, token) do
     CategoryMapping
     |> Ash.Changeset.for_create(:create_system, %{

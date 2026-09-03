@@ -52,6 +52,17 @@ When given a Figma URL to implement:
 2. Map Auto Layout constraints to Tailwind Flexbox/Grid utilities.
 3. Apply the Hybrid Approach: map generic primitives (buttons, inputs, modals, badges) to PetalComponents; map data-dense domain surfaces (ledger, cards, filter bars, paginated lists) to custom semantic HEEx + Tailwind. Keep the app data-dense and legible per the rules above.
 4. **Petal UI kit (design reference):** [Official Petal UI kit (Community)](https://www.figma.com/design/6zsNQ4e8VbV2CnYOrNOsfM/Official-Petal-UI-kit--Community-?m=auto&t=401qAro9Roe7whhp-6) — when implementing from this file, map Figma elements to the corresponding Petal components and Tailwind patterns used in the kit.
+
+## Pull Request Standards & Agent Workflow
+When creating or updating a pull request (`gh pr create`, `gh pr edit`), agents MUST follow [`.github/pull_request_template.md`](.github/pull_request_template.md).
+
+- Pass the full body via a HEREDOC so markdown (headings, lists, checkboxes) is preserved.
+- Fill every applicable section; omit whole sections that do not apply (e.g. no UI → drop Web & UI), never leave placeholder comments in the published body.
+- **Summary** leads with intent and outcome, not a file dump.
+- **What's in the diff** names concrete modules, actions, migrations, and behaviors.
+- **Security checklist** is completed against [`AGENT_SECURITY.md`](AGENT_SECURITY.md) and [`SECURITY.md`](SECURITY.md); call out household isolation and any new `authorize?: false`.
+- **Test plan** lists commands actually run (or explicitly note if the suite could not run) plus any manual/ops steps.
+- Prefer rewriting the whole PR body when the branch has accumulated review fixes, rather than appending disconnected paragraphs.
 <!-- finance-smith-end -->
 
 <!-- usage-rules-start -->

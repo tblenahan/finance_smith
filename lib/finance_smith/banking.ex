@@ -48,6 +48,15 @@ defmodule FinanceSmith.Banking do
       define :destroy_meta_category, action: :destroy
     end
 
+    resource FinanceSmith.Banking.BudgetTarget do
+      define :list_budget_targets, action: :read
+      define :get_budget_target_by_id, action: :read, get_by: [:id]
+      define :create_budget_target, action: :create
+      define :update_budget_target, action: :update
+      define :destroy_budget_target, action: :destroy
+      define :list_budget_targets_for_window, action: :for_window
+    end
+
     resource FinanceSmith.Banking.CategoryMapping do
       define :list_category_mappings, action: :read
       define :destroy_category_mapping, action: :destroy
