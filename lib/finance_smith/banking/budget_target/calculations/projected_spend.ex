@@ -19,6 +19,7 @@ defmodule FinanceSmith.Banking.BudgetTarget.Calculations.ProjectedSpend do
   def expression(_opts, context) do
     start_date = context.arguments[:start_date]
     end_date = context.arguments[:end_date]
+    user_id = context.arguments[:user_id]
     today = Date.utc_today()
     window_days = DatePeriod.day_count(start_date, end_date)
     elapsed = DatePeriod.elapsed_days(start_date, end_date, today)
@@ -29,7 +30,10 @@ defmodule FinanceSmith.Banking.BudgetTarget.Calculations.ProjectedSpend do
         0
       else
         round(
-          type(actual_spend(start_date: ^start_date, end_date: ^as_of), :decimal) *
+          type(
+            actual_spend(start_date: ^start_date, end_date: ^as_of, user_id: ^user_id),
+            :decimal
+          ) *
             type(^window_days, :decimal) / type(^elapsed, :decimal)
         )
       end

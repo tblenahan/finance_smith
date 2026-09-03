@@ -45,6 +45,7 @@ defmodule FinanceSmithWeb.Router do
       on_mount: [{FinanceSmithWeb.Plugs.LiveAuth, :default}] do
       live("/dashboard", DashboardLive, :index)
       live("/accounts", AccountsLive.Index, :index)
+      live("/budgets", BudgetsLive)
       live("/connections/:plaid_item_id", ConnectionLive, :index)
       live("/accounts/:account_id", AccountLive, :index)
       live("/users/settings", UserSettingsLive, :index)

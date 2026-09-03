@@ -7,15 +7,19 @@ defmodule FinanceSmith.Banking.BudgetTarget.Preparations.LoadWindowMetrics do
 
   @impl true
   def prepare(query, _opts, _context) do
-    args = %{
+    date_args = %{
       start_date: Ash.Query.get_argument(query, :start_date),
       end_date: Ash.Query.get_argument(query, :end_date)
     }
 
+    # scaled_target is pure math on the target amount; only the spend
+    # calculations are scoped to an optional user.
+    spend_args = Map.put(date_args, :user_id, Ash.Query.get_argument(query, :user_id))
+
     Ash.Query.load(query,
-      actual_spend: args,
-      scaled_target: args,
-      projected_spend: args
+      actual_spend: spend_args,
+      scaled_target: date_args,
+      projected_spend: spend_args
     )
   end
 end

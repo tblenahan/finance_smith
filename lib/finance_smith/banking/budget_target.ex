@@ -32,6 +32,7 @@ defmodule FinanceSmith.Banking.BudgetTarget do
     read :for_window do
       argument :start_date, :date, allow_nil?: false
       argument :end_date, :date, allow_nil?: false
+      argument :user_id, :uuid, allow_nil?: true, default: nil
       prepare FinanceSmith.Banking.BudgetTarget.Preparations.LoadWindowMetrics
     end
   end
@@ -96,13 +97,16 @@ defmodule FinanceSmith.Banking.BudgetTarget do
                       expr(
                         amount > 0 and date >= ^arg(:start_date) and
                           date <= ^arg(:end_date) and
-                          is_nil(account.duplicate_of_id)
+                          is_nil(account.duplicate_of_id) and
+                          (is_nil(^arg(:user_id)) or
+                             account.plaid_item.user_id == ^arg(:user_id))
                       )
                   ]
                 )
               ) do
       argument :start_date, :date, allow_nil?: false
       argument :end_date, :date, allow_nil?: false
+      argument :user_id, :uuid, allow_nil?: true, default: nil
     end
 
     calculate :scaled_target,
@@ -117,6 +121,7 @@ defmodule FinanceSmith.Banking.BudgetTarget do
               FinanceSmith.Banking.BudgetTarget.Calculations.ProjectedSpend do
       argument :start_date, :date, allow_nil?: false
       argument :end_date, :date, allow_nil?: false
+      argument :user_id, :uuid, allow_nil?: true, default: nil
     end
   end
 
