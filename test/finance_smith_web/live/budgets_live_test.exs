@@ -405,7 +405,156 @@ defmodule FinanceSmithWeb.BudgetsLiveTest do
       assert Banking.get_budget_target_by_id!(target.id, actor: user).amount == 50_000
     end
 
-    test "removes a target", %{conn: conn} do
+    test "creates and updates in the same apply", %{conn: conn} do
+      user = register_user!()
+      %{target: existing} = seed_budget!(user, amount: 50_000, category: "Groceries")
+      new_category = seed_meta_category!(user.household_id, "Subscriptions")
+
+      {:ok, view, _html} = conn |> log_in_user(user) |> live("/budgets")
+
+      view |> element("button", "Adjust Targets") |> render_click()
+
+      view
+      |> form("#sheet-row-#{existing.id}", %{
+        "row_#{existing.id}" => %{"amount" => "600", "period_type" => "monthly"}
+      })
+      |> render_change()
+
+      view
+      |> form("#sheet-row-new-#{new_category.id}", %{
+        "row_new_#{new_category.id}" => %{"amount" => "42", "period_type" => "monthly"}
+      })
+      |> render_change()
+
+      html =
+        view
+        |> element(~s(button[phx-click="apply_sheet"]))
+        |> render_click()
+
+      assert html =~ "Targets updated. Inevitable."
+      assert Banking.get_budget_target_by_id!(existing.id, actor: user).amount == 60_000
+
+      created =
+        Banking.list_budget_targets!(actor: user)
+        |> Enum.find(&(&1.meta_category_id == new_category.id))
+
+      assert created.amount == 4_200
+    end
+
+    test "rolls back the batch on a concurrent unique conflict and allows safe retry", %{
+      conn: conn
+    } do
+      user = register_user!()
+      %{target: existing} = seed_budget!(user, amount: 50_000, category: "Groceries")
+      new_category = seed_meta_category!(user.household_id, "Subscriptions")
+
+      {:ok, view, _html} = conn |> log_in_user(user) |> live("/budgets")
+
+      view |> element("button", "Adjust Targets") |> render_click()
+
+      view
+      |> form("#sheet-row-#{existing.id}", %{
+        "row_#{existing.id}" => %{"amount" => "600", "period_type" => "monthly"}
+      })
+      |> render_change()
+
+      view
+      |> form("#sheet-row-new-#{new_category.id}", %{
+        "row_new_#{new_category.id}" => %{"amount" => "42", "period_type" => "monthly"}
+      })
+      |> render_change()
+
+      # Race a create for the same identity so the sheet's create fails at submit time.
+      raced =
+        create_budget_target!(user, new_category, %{amount: 1_000, period_type: :monthly})
+
+      html =
+        view
+        |> element(~s(button[phx-click="apply_sheet"]))
+        |> render_click()
+
+      assert html =~ "We have a... discrepancy."
+      assert has_element?(view, "#sheet-row-new-#{new_category.id}")
+      assert Banking.get_budget_target_by_id!(existing.id, actor: user).amount == 50_000
+      assert Banking.get_budget_target_by_id!(raced.id, actor: user).amount == 1_000
+
+      :ok = Banking.destroy_budget_target(raced, actor: user)
+
+      html =
+        view
+        |> element(~s(button[phx-click="apply_sheet"]))
+        |> render_click()
+
+      assert html =~ "Targets updated. Inevitable."
+      assert Banking.get_budget_target_by_id!(existing.id, actor: user).amount == 60_000
+
+      created =
+        Banking.list_budget_targets!(actor: user)
+        |> Enum.find(&(&1.meta_category_id == new_category.id))
+
+      assert created.amount == 4_200
+      refute created.id == raced.id
+    end
+
+    test "accepts dollar amounts with a space after the currency symbol", %{conn: conn} do
+      user = register_user!()
+      category = seed_meta_category!(user.household_id, "Utilities")
+
+      {:ok, view, _html} = conn |> log_in_user(user) |> live("/budgets")
+
+      view |> element("button", "Define Targets") |> render_click()
+
+      view
+      |> form("#sheet-row-new-#{category.id}", %{
+        "row_new_#{category.id}" => %{"amount" => "$ 50.00", "period_type" => "monthly"}
+      })
+      |> render_change()
+
+      html =
+        view
+        |> element(~s(button[phx-click="apply_sheet"]))
+        |> render_click()
+
+      assert html =~ "Targets updated. Inevitable."
+
+      [target] = Banking.list_budget_targets!(actor: user)
+      assert target.amount == 5_000
+    end
+
+    test "marks removal as pending until apply and preserves sibling edits", %{conn: conn} do
+      user = register_user!()
+      %{target: keep} = seed_budget!(user, amount: 50_000, category: "Groceries")
+      %{target: remove} = seed_budget!(user, amount: 10_000, category: "Dining")
+
+      {:ok, view, _html} = conn |> log_in_user(user) |> live("/budgets")
+
+      view |> element("button", "Adjust Targets") |> render_click()
+
+      view
+      |> form("#sheet-row-#{keep.id}", %{
+        "row_#{keep.id}" => %{"amount" => "612.50", "period_type" => "monthly"}
+      })
+      |> render_change()
+
+      html =
+        view
+        |> element(~s(button[phx-click="remove_target"][phx-value-id="#{remove.id}"]))
+        |> render_click()
+
+      assert html =~ "Pending removal"
+      assert Banking.get_budget_target_by_id!(remove.id, actor: user).amount == 10_000
+
+      html =
+        view
+        |> element(~s(button[phx-click="apply_sheet"]))
+        |> render_click()
+
+      assert html =~ "Targets updated. Inevitable."
+      assert Banking.get_budget_target_by_id!(keep.id, actor: user).amount == 61_250
+      assert {:error, _} = Banking.get_budget_target_by_id(remove.id, actor: user)
+    end
+
+    test "removes a target after marking pending and applying", %{conn: conn} do
       user = register_user!()
       %{target: target} = seed_budget!(user)
 
@@ -417,7 +566,48 @@ defmodule FinanceSmithWeb.BudgetsLiveTest do
       |> element(~s(button[phx-click="remove_target"][phx-value-id="#{target.id}"]))
       |> render_click()
 
+      assert Banking.get_budget_target_by_id!(target.id, actor: user)
+
+      view
+      |> element(~s(button[phx-click="apply_sheet"]))
+      |> render_click()
+
       assert {:error, _} = Banking.get_budget_target_by_id(target.id, actor: user)
+    end
+  end
+
+  describe "cross-household write isolation" do
+    test "begin_edit and remove_target ignore foreign target ids", %{conn: conn} do
+      other = register_user!()
+      %{target: foreign} = seed_budget!(other, category: "Other Household Rent")
+
+      user = register_user!()
+      %{target: own} = seed_budget!(user, amount: 50_000, category: "Groceries")
+
+      {:ok, view, _html} = conn |> log_in_user(user) |> live("/budgets")
+
+      view
+      |> element("#target-amount-#{own.id}")
+      |> render_hook("begin_edit", %{"id" => foreign.id})
+
+      refute has_element?(view, "#edit-target-form")
+
+      view |> element("button", "Adjust Targets") |> render_click()
+
+      view
+      |> element(~s(button[phx-click="remove_target"][phx-value-id="#{own.id}"]))
+      |> render_click()
+
+      # Forged foreign id is a no-op; own pending-remove state is unchanged by a
+      # separate forged event that never matches a sheet row.
+      render_click(view, "remove_target", %{"id" => foreign.id})
+
+      assert has_element?(view, "#sheet-row-#{own.id}")
+      assert render(view) =~ "Pending removal"
+      assert Banking.get_budget_target_by_id!(own.id, actor: user).amount == 50_000
+
+      assert Banking.get_budget_target_by_id!(foreign.id, actor: other).amount ==
+               foreign.amount
     end
   end
 end

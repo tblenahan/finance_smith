@@ -14,6 +14,7 @@ defmodule FinanceSmithWeb.BudgetsLive do
   alias FinanceSmith.Banking
   alias FinanceSmith.Banking.BudgetTarget
   alias FinanceSmith.Banking.DatePeriod
+  alias FinanceSmith.Repo
   alias FinanceSmithWeb.MoneyFormat
   alias FinanceSmithWeb.TransactionLiveHelpers
   alias FinanceSmithWeb.TransactionTableComponent
@@ -206,24 +207,27 @@ defmodule FinanceSmithWeb.BudgetsLive do
     end
   end
 
-  # Two-phase apply: every dirty row is validated first, and nothing is
-  # submitted unless all of them pass, so a bad row cannot cause a partial
-  # apply. Submit-time failures (e.g. a concurrent unique-period conflict)
-  # are still surfaced per row on the reopened sheet.
+  # Two-phase apply: every dirty form row is validated first, then creates,
+  # updates, and pending destroys run inside one Repo transaction so a
+  # submit-time failure rolls everything back. The sheet stays open with
+  # the failing row's errors so the user can correct and retry safely.
   def handle_event("apply_sheet", _params, socket) do
     {dirty_rows, clean_rows} = Enum.split_with(socket.assigns.sheet_rows, &sheet_row_dirty?/1)
 
+    {pending_removes, form_rows} =
+      Enum.split_with(dirty_rows, &Map.get(&1, :pending_remove?, false))
+
     validated =
-      Enum.map(dirty_rows, fn row ->
+      Enum.map(form_rows, fn row ->
         %{row | form: AshPhoenix.Form.validate(row.form, row.form.source.raw_params)}
       end)
 
     cond do
-      validated == [] ->
+      dirty_rows == [] ->
         {:noreply, put_flash(socket, :info, "No changes to apply.")}
 
       Enum.any?(validated, &(not &1.form.source.valid?)) ->
-        rows = Enum.sort_by(validated ++ clean_rows, & &1.category_name)
+        rows = Enum.sort_by(validated ++ pending_removes ++ clean_rows, & &1.category_name)
 
         {:noreply,
          socket
@@ -231,47 +235,81 @@ defmodule FinanceSmithWeb.BudgetsLive do
          |> put_flash(:error, "We have a... discrepancy. Review the highlighted targets.")}
 
       true ->
-        submitted =
-          Enum.map(validated, fn row ->
-            case AshPhoenix.Form.submit(row.form) do
-              {:ok, _record} -> {:ok, row}
-              {:error, form} -> {:error, %{row | form: form}}
-            end
-          end)
+        user = socket.assigns.current_user
 
-        socket = apply_window(socket, socket.assigns.window)
+        case Repo.transaction(fn ->
+               Enum.each(pending_removes, fn row ->
+                 case Banking.destroy_budget_target(row.target, actor: user) do
+                   :ok -> :ok
+                   {:error, error} -> Repo.rollback({:destroy_error, row, error})
+                 end
+               end)
 
-        if Enum.any?(submitted, &match?({:error, _}, &1)) do
-          rows =
-            (Enum.map(submitted, fn {_status, row} -> row end) ++ clean_rows)
-            |> Enum.sort_by(& &1.category_name)
+               Enum.each(validated, fn row ->
+                 case AshPhoenix.Form.submit(row.form) do
+                   {:ok, _record} -> :ok
+                   {:error, form} -> Repo.rollback({:submit_error, %{row | form: form}})
+                 end
+               end)
 
-          {:noreply,
-           socket
-           |> assign(:sheet_rows, rows)
-           |> put_flash(:error, "We have a... discrepancy. Review the highlighted targets.")}
-        else
-          {:noreply,
-           socket
-           |> assign(sheet_open?: false, sheet_rows: [])
-           |> put_flash(:info, "Targets updated. Inevitable.")}
+               :ok
+             end) do
+          {:ok, :ok} ->
+            {:noreply,
+             socket
+             |> apply_window(socket.assigns.window)
+             |> assign(sheet_open?: false, sheet_rows: [])
+             |> put_flash(:info, "Targets updated. Inevitable.")}
+
+          {:error, {:submit_error, failed_row}} ->
+            rows =
+              (Enum.map(validated, fn row ->
+                 if row.id == failed_row.id, do: failed_row, else: row
+               end) ++ pending_removes ++ clean_rows)
+              |> Enum.sort_by(& &1.category_name)
+
+            {:noreply,
+             socket
+             |> assign(:sheet_rows, rows)
+             |> put_flash(:error, "We have a... discrepancy. Review the highlighted targets.")}
+
+          {:error, {:destroy_error, _row, _error}} ->
+            {:noreply,
+             put_flash(
+               socket,
+               :error,
+               "We have a... discrepancy. Review the highlighted targets."
+             )}
+
+          {:error, _other} ->
+            {:noreply,
+             put_flash(
+               socket,
+               :error,
+               "We have a... discrepancy. Review the highlighted targets."
+             )}
         end
     end
   end
 
+  # Marks an update row for removal on Apply. Toggles so the user can undo
+  # without rebuilding the sheet and wiping sibling edits.
   def handle_event("remove_target", %{"id" => id}, socket) do
-    with %BudgetTarget{} = target <- Enum.find(socket.assigns.targets, &(&1.id == id)),
-         :ok <- Banking.destroy_budget_target(target, actor: socket.assigns.current_user) do
-      socket = apply_window(socket, socket.assigns.window)
+    case Enum.find(socket.assigns.sheet_rows, &(&1.id == id and &1.kind == :update)) do
+      nil ->
+        {:noreply, socket}
 
-      {:noreply,
-       socket
-       |> assign(:sheet_rows, build_sheet_rows(socket))
-       |> put_flash(:info, "Target removed. It no longer serves a purpose.")}
-    else
-      _ ->
-        {:noreply,
-         put_flash(socket, :error, "We have a... discrepancy. The target was not removed.")}
+      _row ->
+        rows =
+          Enum.map(socket.assigns.sheet_rows, fn
+            %{id: ^id, kind: :update} = row ->
+              Map.update(row, :pending_remove?, true, &(!&1))
+
+            other ->
+              other
+          end)
+
+        {:noreply, assign(socket, :sheet_rows, rows)}
     end
   end
 
@@ -621,15 +659,29 @@ defmodule FinanceSmithWeb.BudgetsLive do
               for={row.form}
               id={row.form.id}
               phx-change="validate_sheet"
-              class="flex items-start gap-2 py-2.5"
+              class={[
+                "flex items-start gap-2 py-2.5",
+                Map.get(row, :pending_remove?, false) && "opacity-50"
+              ]}
             >
               <div class="flex-1 min-w-0 pt-1.5">
-                <p class="truncate text-sm text-gray-100">{row.category_name}</p>
+                <p class={[
+                  "truncate text-sm text-gray-100",
+                  Map.get(row, :pending_remove?, false) && "line-through text-gray-500"
+                ]}>
+                  {row.category_name}
+                </p>
                 <p
                   :if={row.kind == :create}
                   class="font-mono text-[10px] uppercase tracking-widest text-gray-600"
                 >
                   No target
+                </p>
+                <p
+                  :if={Map.get(row, :pending_remove?, false)}
+                  class="font-mono text-[10px] uppercase tracking-widest text-red-400"
+                >
+                  Pending removal
                 </p>
               </div>
 
@@ -639,7 +691,8 @@ defmodule FinanceSmithWeb.BudgetsLive do
                   type="text"
                   inputmode="decimal"
                   placeholder="0.00"
-                  class="w-full bg-gray-900 border border-gray-800 rounded font-mono text-sm text-right text-gray-100 px-2 py-1.5 placeholder-gray-600 focus:outline-none focus:border-gray-600"
+                  disabled={Map.get(row, :pending_remove?, false)}
+                  class="w-full bg-gray-900 border border-gray-800 rounded font-mono text-sm text-right text-gray-100 px-2 py-1.5 placeholder-gray-600 focus:outline-none focus:border-gray-600 disabled:opacity-50"
                 />
                 <p
                   :for={msg <- field_errors(row.form[:amount])}
@@ -654,7 +707,8 @@ defmodule FinanceSmithWeb.BudgetsLive do
                   field={row.form[:period_type]}
                   type="select"
                   options={period_options()}
-                  class="w-full bg-gray-900 border border-gray-800 rounded text-gray-400 font-mono text-[10px] uppercase tracking-wider px-2 py-2 focus:outline-none focus:border-gray-600 cursor-pointer"
+                  disabled={Map.get(row, :pending_remove?, false)}
+                  class="w-full bg-gray-900 border border-gray-800 rounded text-gray-400 font-mono text-[10px] uppercase tracking-wider px-2 py-2 focus:outline-none focus:border-gray-600 cursor-pointer disabled:opacity-50"
                 />
                 <p
                   :for={msg <- field_errors(row.form[:period_type])}
@@ -669,10 +723,21 @@ defmodule FinanceSmithWeb.BudgetsLive do
                 type="button"
                 phx-click="remove_target"
                 phx-value-id={row.id}
-                title="Remove target"
-                class="pt-2 px-1 font-mono text-xs text-gray-600 hover:text-red-400 transition-colors"
+                title={
+                  if(Map.get(row, :pending_remove?, false),
+                    do: "Undo removal",
+                    else: "Remove target"
+                  )
+                }
+                class={[
+                  "pt-2 px-1 font-mono text-xs transition-colors",
+                  if(Map.get(row, :pending_remove?, false),
+                    do: "text-sky-400 hover:text-sky-300",
+                    else: "text-gray-600 hover:text-red-400"
+                  )
+                ]}
               >
-                ✕
+                {if Map.get(row, :pending_remove?, false), do: "Undo", else: "✕"}
               </button>
               <span :if={row.kind == :create} class="w-[22px]"></span>
             </.form>
@@ -796,6 +861,7 @@ defmodule FinanceSmithWeb.BudgetsLive do
           kind: :update,
           category_name: target.meta_category.name,
           target: target,
+          pending_remove?: false,
           form: form
         }
       end)
@@ -828,10 +894,12 @@ defmodule FinanceSmithWeb.BudgetsLive do
   end
 
   # A create row only submits once an amount has been entered; an update row
-  # only submits when its values differ from the persisted target. The field
-  # value is integer cents when transform_params succeeded, or the raw string
-  # when the input is blank/invalid (invalid input still submits so the cast
-  # error surfaces on the row).
+  # only submits when its values differ from the persisted target, or when
+  # marked for pending removal. The field value is integer cents when
+  # transform_params succeeded, or the raw string when the input is
+  # blank/invalid (invalid input still submits so the cast error surfaces).
+  defp sheet_row_dirty?(%{pending_remove?: true}), do: true
+
   defp sheet_row_dirty?(%{kind: :create, form: form}) do
     case form[:amount].value do
       cents when is_integer(cents) -> true
@@ -871,7 +939,7 @@ defmodule FinanceSmithWeb.BudgetsLive do
   end
 
   defp dollars_to_cents(raw) when is_binary(raw) do
-    cleaned = raw |> String.trim() |> String.replace(["$", ","], "")
+    cleaned = raw |> String.replace(["$", ","], "") |> String.trim()
 
     case Decimal.parse(cleaned) do
       {decimal, ""} ->
