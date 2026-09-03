@@ -44,6 +44,12 @@ defmodule FinanceSmithWeb.Layouts do
                     Accounts
                   </.link>
                   <.link
+                    navigate={~p"/budgets"}
+                    class={["rounded px-2 py-1 font-mono text-sm transition-colors", (assigns[:current_nav] == :budgets && "text-emerald-400") || "text-gray-500 hover:text-emerald-400"]}
+                  >
+                    Budgets
+                  </.link>
+                  <.link
                     navigate={~p"/users/settings"}
                     class={["rounded px-2 py-1 font-mono text-sm transition-colors", (assigns[:current_nav] == :settings && "text-emerald-400") || "text-gray-500 hover:text-emerald-400"]}
                   >
