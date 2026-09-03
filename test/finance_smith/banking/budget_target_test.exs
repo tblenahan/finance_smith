@@ -22,11 +22,23 @@ defmodule FinanceSmith.Banking.BudgetTargetTest do
     |> Ash.update!(authorize?: false)
   end
 
-  defp load_window!(user, start_date, end_date) do
+  defp load_window!(user, start_date, end_date, extra_args \\ %{}) do
     Banking.list_budget_targets_for_window!(
-      %{start_date: start_date, end_date: end_date},
+      Map.merge(%{start_date: start_date, end_date: end_date}, extra_args),
       actor: user
     )
+  end
+
+  defp share_household!(user1, user2) do
+    # Move user2 into user1's household so they share it. household_id is not
+    # a public input on the default :update action, so force_change_attribute/3
+    # is used (test-only helper; mirrors other authorize?: false test setup).
+    user2
+    |> Ash.Changeset.for_update(:update, %{})
+    |> Ash.Changeset.force_change_attribute(:household_id, user1.household_id)
+    |> Ash.update!(authorize?: false)
+
+    Ash.get!(Identity.User, user2.id, authorize?: false)
   end
 
   describe "actual_spend" do
@@ -220,6 +232,73 @@ defmodule FinanceSmith.Banking.BudgetTargetTest do
       [loaded] = load_window!(user, start_date, end_date)
       assert loaded.actual_spend == 2_500
       assert loaded.projected_spend == 2_500
+    end
+  end
+
+  describe "user_id scoping" do
+    defp seed_two_member_household!(date) do
+      owner = register_user!()
+      member = share_household!(owner, register_user!())
+
+      owner_account = create_account!(create_plaid_item!(owner))
+      member_account = create_account!(create_plaid_item!(member))
+
+      groceries = seed_meta_category!(owner.household_id, "Groceries")
+      _target = create_budget_target!(owner, groceries, %{amount: 50_000, period_type: :monthly})
+
+      _owner_outflow =
+        create_transaction!(owner_account,
+          amount: 1_000,
+          date: date,
+          meta_category_id: groceries.id
+        )
+
+      _member_outflow =
+        create_transaction!(member_account,
+          amount: 600,
+          date: date,
+          meta_category_id: groceries.id
+        )
+
+      %{owner: owner, member: member}
+    end
+
+    test "without user_id, actual_spend is household-wide" do
+      %{owner: owner} = seed_two_member_household!(~D[2026-04-10])
+
+      [loaded] = load_window!(owner, ~D[2026-04-01], ~D[2026-04-30])
+      assert loaded.actual_spend == 1_600
+    end
+
+    test "with user_id, actual_spend counts only that member's transactions" do
+      %{owner: owner, member: member} = seed_two_member_household!(~D[2026-04-10])
+
+      [loaded] = load_window!(owner, ~D[2026-04-01], ~D[2026-04-30], %{user_id: member.id})
+      assert loaded.actual_spend == 600
+
+      [loaded] = load_window!(owner, ~D[2026-04-01], ~D[2026-04-30], %{user_id: owner.id})
+      assert loaded.actual_spend == 1_000
+    end
+
+    test "projected_spend respects the user_id filter across an in-progress window" do
+      today = Date.utc_today()
+      start_date = Date.add(today, -2)
+      end_date = Date.add(today, 2)
+
+      assert DatePeriod.day_count(start_date, end_date) == 5
+      assert DatePeriod.elapsed_days(start_date, end_date, today) == 3
+
+      %{owner: owner, member: member} = seed_two_member_household!(Date.add(today, -1))
+
+      # Member-only base of 600 extrapolated: 600 * 5 / 3 = 1000.
+      [loaded] = load_window!(owner, start_date, end_date, %{user_id: member.id})
+      assert loaded.actual_spend == 600
+      assert loaded.projected_spend == 1_000
+
+      # Unscoped extrapolation uses the household-wide 1_600: 1600 * 5 / 3 → 2667.
+      [loaded] = load_window!(owner, start_date, end_date)
+      assert loaded.actual_spend == 1_600
+      assert loaded.projected_spend == 2_667
     end
   end
 
