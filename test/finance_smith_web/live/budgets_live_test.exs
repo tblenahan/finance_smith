@@ -574,6 +574,112 @@ defmodule FinanceSmithWeb.BudgetsLiveTest do
 
       assert {:error, _} = Banking.get_budget_target_by_id(target.id, actor: user)
     end
+
+    test "allows adding a second period type for an existing category", %{conn: conn} do
+      user = register_user!()
+
+      %{target: existing, category: category} =
+        seed_budget!(user, amount: 50_000, category: "Groceries", period_type: :monthly)
+
+      {:ok, view, _html} = conn |> log_in_user(user) |> live("/budgets")
+
+      view |> element("button", "Adjust Targets") |> render_click()
+
+      # Click + on the Groceries row to add another period type
+      view
+      |> element(~s(button[phx-click="add_period_row"][phx-value-category-id="#{category.id}"]))
+      |> render_click()
+
+      assert has_element?(view, "#sheet-row-new-#{category.id}_weekly")
+
+      # Enter weekly target amount
+      view
+      |> form("#sheet-row-new-#{category.id}_weekly", %{
+        "row_new_#{category.id}_weekly" => %{"amount" => "150", "period_type" => "weekly"}
+      })
+      |> render_change()
+
+      html =
+        view
+        |> element(~s(button[phx-click="apply_sheet"]))
+        |> render_click()
+
+      assert html =~ "Targets updated. Inevitable."
+
+      targets =
+        Banking.list_budget_targets!(actor: user)
+        |> Enum.filter(&(&1.meta_category_id == category.id))
+
+      assert length(targets) == 2
+      monthly = Enum.find(targets, &(&1.period_type == :monthly))
+      weekly = Enum.find(targets, &(&1.period_type == :weekly))
+
+      assert monthly.id == existing.id
+      assert monthly.amount == 50_000
+      assert weekly.amount == 15_000
+    end
+
+    test "allows dismissing a dynamically added period row before applying", %{conn: conn} do
+      user = register_user!()
+      %{category: category} = seed_budget!(user, amount: 50_000, category: "Groceries")
+
+      {:ok, view, _html} = conn |> log_in_user(user) |> live("/budgets")
+
+      view |> element("button", "Adjust Targets") |> render_click()
+
+      view
+      |> element(~s(button[phx-click="add_period_row"][phx-value-category-id="#{category.id}"]))
+      |> render_click()
+
+      assert has_element?(view, "#sheet-row-new-#{category.id}_weekly")
+
+      view
+      |> element(
+        ~s(button[phx-click="dismiss_sheet_row"][phx-value-id="new_#{category.id}_weekly"])
+      )
+      |> render_click()
+
+      refute has_element?(view, "#sheet-row-new-#{category.id}_weekly")
+    end
+
+    test "highlights failing row when destroy fails and rolls back siblings", %{conn: conn} do
+      user = register_user!()
+      other = register_user!()
+      %{target: keep} = seed_budget!(user, amount: 50_000, category: "Groceries")
+      %{target: remove} = seed_budget!(user, amount: 10_000, category: "Dining")
+
+      {:ok, view, _html} = conn |> log_in_user(user) |> live("/budgets")
+
+      view |> element("button", "Adjust Targets") |> render_click()
+
+      # Edit keep row
+      view
+      |> form("#sheet-row-#{keep.id}", %{
+        "row_#{keep.id}" => %{"amount" => "612.50", "period_type" => "monthly"}
+      })
+      |> render_change()
+
+      # Mark remove row for removal
+      view
+      |> element(~s(button[phx-click="remove_target"][phx-value-id="#{remove.id}"]))
+      |> render_click()
+
+      # Transfer remove target to another household in DB so destroy violates policy in DB at apply time
+      remove
+      |> Ash.Changeset.for_update(:update, %{}, authorize?: false)
+      |> Ash.Changeset.force_change_attribute(:household_id, other.household_id)
+      |> Ash.update!(authorize?: false)
+
+      html =
+        view
+        |> element(~s(button[phx-click="apply_sheet"]))
+        |> render_click()
+
+      assert html =~ "We have a... discrepancy."
+      assert html =~ "Removal failed"
+      # Sibling update rolled back
+      assert Banking.get_budget_target_by_id!(keep.id, actor: user).amount == 50_000
+    end
   end
 
   describe "cross-household write isolation" do
