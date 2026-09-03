@@ -160,6 +160,42 @@ defmodule FinanceSmith.Banking.BudgetTargetTest do
       assert loaded.projected_spend == 1_667
     end
 
+    test "ignores future in-window transactions when extrapolating projected_spend" do
+      user = register_user!()
+      plaid_item = create_plaid_item!(user)
+      account = create_account!(plaid_item)
+      groceries = seed_meta_category!(user.household_id, "Groceries")
+      _target = create_budget_target!(user, groceries, %{amount: 10_000, period_type: :monthly})
+
+      today = Date.utc_today()
+      start_date = Date.add(today, -2)
+      end_date = Date.add(today, 2)
+
+      assert DatePeriod.day_count(start_date, end_date) == 5
+      assert DatePeriod.elapsed_days(start_date, end_date, today) == 3
+      assert DatePeriod.as_of_date(end_date, today) == today
+
+      _past_outflow =
+        create_transaction!(account,
+          amount: 1_000,
+          date: Date.add(today, -1),
+          meta_category_id: groceries.id
+        )
+
+      _future_outflow =
+        create_transaction!(account,
+          amount: 500,
+          date: Date.add(today, 1),
+          meta_category_id: groceries.id
+        )
+
+      # Window actual_spend includes the future row (1_000 + 500).
+      # projected_spend extrapolates only through as_of (today): 1000 * 5 / 3 → 1667.
+      [loaded] = load_window!(user, start_date, end_date)
+      assert loaded.actual_spend == 1_500
+      assert loaded.projected_spend == 1_667
+    end
+
     test "equals actual_spend when the window is fully elapsed" do
       user = register_user!()
       plaid_item = create_plaid_item!(user)

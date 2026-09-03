@@ -28,6 +28,16 @@ defmodule FinanceSmith.Banking.DatePeriodTest do
                {~D[2026-01-01], ~D[2026-03-31]}
     end
 
+    test "resolves Q2 as April through June" do
+      assert DatePeriod.to_range(:quarterly, ~D[2026-05-10]) ==
+               {~D[2026-04-01], ~D[2026-06-30]}
+    end
+
+    test "resolves Q3 as July through September" do
+      assert DatePeriod.to_range(:quarterly, ~D[2026-08-20]) ==
+               {~D[2026-07-01], ~D[2026-09-30]}
+    end
+
     test "resolves Q4 as October through December" do
       assert DatePeriod.to_range(:quarterly, ~D[2026-11-01]) ==
                {~D[2026-10-01], ~D[2026-12-31]}
@@ -91,6 +101,20 @@ defmodule FinanceSmith.Banking.DatePeriodTest do
   describe "period_day_count/2" do
     test "counts 366 days in leap year 2024" do
       assert DatePeriod.period_day_count(:yearly, ~D[2024-07-04]) == 366
+    end
+  end
+
+  describe "as_of_date/2" do
+    test "returns today when today is before end_date" do
+      assert DatePeriod.as_of_date(~D[2026-03-20], ~D[2026-03-15]) == ~D[2026-03-15]
+    end
+
+    test "returns end_date when today equals end_date" do
+      assert DatePeriod.as_of_date(~D[2026-03-20], ~D[2026-03-20]) == ~D[2026-03-20]
+    end
+
+    test "returns end_date when today is after end_date" do
+      assert DatePeriod.as_of_date(~D[2026-03-20], ~D[2026-03-25]) == ~D[2026-03-20]
     end
   end
 end

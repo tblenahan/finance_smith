@@ -79,6 +79,18 @@ defmodule FinanceSmith.Banking.DatePeriod do
     day_count(start_date, end_date)
   end
 
+  @doc """
+  Returns `today` clamped to at most `end_date`.
+
+  Used so projection bases only include spend through today when the
+  window is still open, and through `end_date` once the window has
+  closed — never post-dated rows still inside an in-progress window.
+  """
+  @spec as_of_date(Date.t(), Date.t()) :: Date.t()
+  def as_of_date(%Date{} = end_date, %Date{} = today) do
+    if Date.compare(today, end_date) == :lt, do: today, else: end_date
+  end
+
   defp quarter_start_month(month) when month in 1..3, do: 1
   defp quarter_start_month(month) when month in 4..6, do: 4
   defp quarter_start_month(month) when month in 7..9, do: 7
